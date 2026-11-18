@@ -3,7 +3,10 @@ set -eu
 cd "$(dirname "$0")/.."
 if [ -f .env ]; then
     while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in MYSQL_ROOT_PASSWORD=*|SICA_DB_PORT=*) export "$line" ;; esac
+        case "$line" in
+            MYSQL_ROOT_PASSWORD=*) [ "${MYSQL_ROOT_PASSWORD+x}" = x ] || export "$line" ;;
+            SICA_DB_PORT=*) [ "${SICA_DB_PORT+x}" = x ] || export "$line" ;;
+        esac
     done < .env
 fi
 docker compose up -d --wait
