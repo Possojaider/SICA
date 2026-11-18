@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.geometry.Insets?>
+<BorderPane xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.sica.presentation.ShellController">
+  <left>
+    <VBox prefWidth="218" spacing="6" styleClass="sidebar">
+      <padding><Insets top="28" right="16" bottom="22" left="16"/></padding>
+      <Label text="SICA" styleClass="brand"/>
+      <Label text="ZONA ACME" styleClass="sidebar-caption"/>
+      <Separator/>
+      <VBox fx:id="navigation" spacing="5" VBox.vgrow="ALWAYS"/>
+      <Button text="Cerrar sesión" onAction="#logout" maxWidth="Infinity" styleClass="nav-button"/>
+    </VBox>
+  </left>
+  <center>
+    <VBox spacing="18" styleClass="workspace">
+      <padding><Insets top="26" right="28" bottom="24" left="28"/></padding>
+      <HBox alignment="CENTER_LEFT" spacing="16">
+        <VBox spacing="4" HBox.hgrow="ALWAYS">
+          <Label fx:id="heading" text="Panel principal" styleClass="page-title"/>
+          <Label fx:id="notice" text="Consultando datos…" styleClass="muted" wrapText="true"/>
+        </VBox>
+        <ProgressIndicator fx:id="loading" visible="false" managed="false" prefHeight="24" prefWidth="24"/>
+        <Button text="Actualizar" onAction="#refresh"/>
+      </HBox>
+      <HBox fx:id="statistics" spacing="14"/>
+      <HBox spacing="10" alignment="CENTER_LEFT">
+        <TextField fx:id="search" promptText="Buscar por documento, nombre o empresa" onAction="#refresh" HBox.hgrow="ALWAYS"/>
+        <DatePicker fx:id="from" promptText="Desde" prefWidth="145"/>
+        <DatePicker fx:id="until" promptText="Hasta" prefWidth="145"/>
+        <Button text="Aplicar" onAction="#refresh"/>
+        <Button text="Limpiar" onAction="#clearFilters"/>
+      </HBox>
+      <HBox fx:id="reportSelector" spacing="10" alignment="CENTER_LEFT">
+        <Label fx:id="reportLabel" text="Informe"/>
+        <ComboBox fx:id="reportType" prefWidth="270"/>
+        <Label fx:id="stateLabel" text="Estado"/>
+        <ComboBox fx:id="stateFilter" prefWidth="190"/>
+      </HBox>
+      <HBox fx:id="actions" spacing="9"/>
+      <TableView fx:id="table" VBox.vgrow="ALWAYS">
+        <placeholder><Label text="Sin resultados para los filtros seleccionados."/></placeholder>
+      </TableView>
+      <HBox alignment="CENTER_LEFT" spacing="16">
+        <Label fx:id="rowCount" text="0 registros" styleClass="muted" HBox.hgrow="ALWAYS"/>
+        <Label fx:id="status" wrapText="true"/>
+      </HBox>
+    </VBox>
+  </center>
+</BorderPane>

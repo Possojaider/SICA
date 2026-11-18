@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.geometry.Insets?>
+<BorderPane xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.sica.presentation.LoginController" styleClass="login-root">
+  <left>
+    <VBox prefWidth="420" spacing="24" styleClass="login-brand">
+      <padding><Insets top="70" right="48" bottom="48" left="48"/></padding>
+      <Label text="SICA" styleClass="brand-large"/>
+      <Label text="Zona Acme" styleClass="brand-subtitle"/>
+      <Region VBox.vgrow="ALWAYS"/>
+      <Label text="Control de acceso&#10;con trazabilidad." wrapText="true" styleClass="login-heading"/>
+      <Label text="Personas, autorizaciones y visitas en un solo lugar." wrapText="true" styleClass="brand-subtitle"/>
+    </VBox>
+  </left>
+  <center>
+    <VBox alignment="CENTER" spacing="16" maxWidth="490">
+      <padding><Insets top="60" right="60" bottom="60" left="60"/></padding>
+      <Label text="Bienvenido" styleClass="page-title"/>
+      <Label text="Ingresa con tu cuenta de seguridad." styleClass="muted"/>
+      <VBox spacing="7">
+        <Label text="Correo electrónico"/>
+        <TextField fx:id="email" promptText="nombre@empresa.com" onAction="#login"/>
+        <Label text="Contraseña"/>
+        <PasswordField fx:id="password" promptText="Tu contraseña" onAction="#login"/>
+      </VBox>
+      <Button fx:id="submit" text="Iniciar sesión" onAction="#login" maxWidth="Infinity" defaultButton="true" styleClass="primary"/>
+      <ProgressIndicator fx:id="loading" visible="false" managed="false" prefWidth="26" prefHeight="26"/>
+      <Label fx:id="message" wrapText="true" styleClass="error"/>
+    </VBox>
+  </center>
+</BorderPane>
