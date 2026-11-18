@@ -1,0 +1,12 @@
+REVOKE ALL PRIVILEGES ON sica.* FROM 'sica'@'%';
+GRANT SELECT ON sica.roles TO 'sica'@'%';
+GRANT SELECT ON sica.permisos TO 'sica'@'%';
+GRANT SELECT ON sica.rol_permisos TO 'sica'@'%';
+GRANT SELECT ON sica.persona_estados_acceso TO 'sica'@'%';
+GRANT SELECT ON sica.visita_estados TO 'sica'@'%';
+GRANT SELECT, INSERT, UPDATE ON sica.usuarios TO 'sica'@'%';
+GRANT SELECT, INSERT, UPDATE ON sica.empresas TO 'sica'@'%';
+GRANT SELECT, INSERT, UPDATE ON sica.personas TO 'sica'@'%';
+GRANT SELECT, INSERT, UPDATE ON sica.visitas TO 'sica'@'%';
+GRANT SELECT, INSERT ON sica.incidentes TO 'sica'@'%';
+GRANT SELECT, INSERT ON sica.bitacora_auditoria TO 'sica'@'%';
