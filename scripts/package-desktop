@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+./mvnw -B -ntp package dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/app-input
+cp target/sica-1.0.0.jar target/app-input/
+# Cada ejecución conserva los paquetes previos en un directorio fechado.
+destination="target/desktop-$(date +%Y%m%d-%H%M%S)"
+jpackage --type app-image --name SICA --app-version 1.0.0 --vendor "Zona Acme" \
+    --input target/app-input --main-jar sica-1.0.0.jar --main-class com.sica.Main \
+    --dest "$destination" --java-options "-Dsica.env.file=$PWD/.env" \
+    --add-modules java.desktop,java.sql,java.naming,java.logging,java.xml,java.scripting,jdk.unsupported,jdk.crypto.ec
+printf 'Aplicación creada en %s\n' "$destination"
