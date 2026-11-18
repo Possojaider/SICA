@@ -286,3 +286,9 @@ El repositorio utiliza ramas `main` y `develop`, ramas de funcionalidad y Conven
 | 8 · Verificación | JUnit 5, integración MySQL y esta guía. Corrección de errores y empaquetado |
 
 Para conectar el repositorio local a un repositorio de GitHub elegido por el propietario, configurar su URL como remoto `origin` y publicar las ramas de trabajo. La configuración local de credenciales queda excluida del historial.
+
+### Resultado de verificación en este equipo
+
+El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 28 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel y los reportes.
+
+El paquete de escritorio se inició con el runtime incluido. La herramienta de inspección nativa agotó el tiempo de espera también con otras aplicaciones del equipo, por lo que la revisión de las vistas se hizo mediante las pruebas de carga, navegación y renderizado JavaFX. La interacción manual con ventanas del sistema, como el selector de archivos CSV, queda pendiente de comprobación manual.
