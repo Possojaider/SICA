@@ -164,19 +164,85 @@ public final class JdbcStore implements Store {
         public long createVisit(long person, long company, AccessPolicy type, String state, LocalDateTime start,
                                 LocalDateTime end, long actor, LocalDateTime now) {
             boolean approved = state.equals("APROBADA");
-            return insert("INSERT INTO visitas (persona,empresa,tipo,estado,inicio,vence,solicitado_por,decidido_por,decidido_en) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?)", person, company, type.name(), state, start, end, actor,
-                    approved ? actor : null, approved ? now : null);
+            return insert("INSERT INTO visitas (persona,empresa,tipo,estado,inicio,vence,solicitado_por,decidido_por,decidido_en,motivo_decision) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)", person, company, type.name(), state, start, end, actor,
+                    approved ? actor : null, approved ? now : null, approved ? "Registro anticipado autorizado" : null);
         }
 
         @Override
-        public void decide(long visit, String state, long actor, LocalDateTime now) {
-            update("UPDATE visitas SET estado=?,decidido_por=?,decidido_en=? WHERE id=?", state, actor, now, visit);
+        public void decide(long visit, String state, long actor, LocalDateTime now, String reason) {
+            update("UPDATE visitas SET estado=?,decidido_por=?,decidido_en=?,motivo_decision=? WHERE id=?",
+                    state, actor, now, reason, visit);
+        }
+
+        @Override
+        public void notifyRequest(long visit, long company, LocalDateTime now) {
+            execute("""
+                    INSERT INTO notificaciones (usuario,visita,evento,mensaje,fecha)
+                    SELECT u.id,?,'SOLICITUD',?,? FROM usuarios u
+                    JOIN rol_permisos rp ON rp.rol=u.rol AND rp.permiso='DECIDIR'
+                    WHERE u.activo=TRUE AND (u.rol<>'FUNCIONARIO' OR u.empresa=?)
+                    """, visit, "Solicitud de ingreso pendiente · visita " + visit, now, company);
+        }
+
+        @Override
+        public void notifyDecision(long visit, String state, LocalDateTime now) {
+            execute("""
+                    INSERT INTO notificaciones (usuario,visita,evento,mensaje,fecha)
+                    SELECT u.id,v.id,'DECISION',?,? FROM usuarios u JOIN visitas v ON v.id=?
+                    WHERE u.activo=TRUE AND (u.rol<>'FUNCIONARIO' OR u.empresa=v.empresa)
+                      AND (u.id=v.solicitado_por OR EXISTS (
+                      SELECT 1 FROM rol_permisos rp WHERE rp.rol=u.rol AND rp.permiso='ACCESO'))
+                    """, "Solicitud " + state.toLowerCase(Locale.ROOT) + " · visita " + visit, now, visit);
+        }
+
+        @Override
+        public Data notifications(long user, String search, LocalDateTime from, LocalDateTime until) {
+            String sql = """
+                    SELECT id ID,visita Visita,fecha Fecha,evento Evento,mensaje Mensaje,
+                      CASE WHEN leida_en IS NULL THEN 'SIN_LEER' ELSE 'LEIDA' END Estado,leida_en LeidaEn
+                    FROM notificaciones WHERE usuario=? AND LOCATE(?,LOWER(mensaje))>0
+                    """;
+            List<Object> parameters = new ArrayList<>(List.of(user, search.strip().toLowerCase(Locale.ROOT)));
+            if (from != null) { sql += " AND fecha>=?"; parameters.add(from); }
+            if (until != null) { sql += " AND fecha<?"; parameters.add(until); }
+            return query(sql + " ORDER BY id DESC", JdbcUnit::readData, parameters.toArray());
+        }
+
+        @Override
+        public long unreadNotifications(long user) {
+            return count("SELECT COUNT(*) FROM notificaciones WHERE usuario=? AND leida_en IS NULL", user);
+        }
+
+        @Override
+        public boolean markNotificationRead(long user, long id, LocalDateTime now) {
+            boolean unread = query("SELECT leida_en FROM notificaciones WHERE id=? AND usuario=? FOR UPDATE", rs -> {
+                if (!rs.next()) throw new SicaException("La notificación no está disponible para tu usuario.");
+                return rs.getTimestamp(1) == null;
+            }, id, user);
+            if (unread) update("UPDATE notificaciones SET leida_en=? WHERE id=? AND usuario=?", now, id, user);
+            return unread;
+        }
+
+        @Override
+        public Visit visitByCredential(String hash) {
+            return query("SELECT id,persona,empresa,estado,inicio,vence,entrada FROM visitas WHERE qr_hash=?",
+                    JdbcUnit::readVisit, hash);
+        }
+
+        @Override
+        public String credentialHash(long visit) {
+            return query("SELECT qr_hash FROM visitas WHERE id=?", rs -> rs.next() ? rs.getString(1) : null, visit);
+        }
+
+        @Override
+        public void setCredential(long visit, String hash) {
+            update("UPDATE visitas SET qr_hash=? WHERE id=?", hash, visit);
         }
 
         @Override
         public void enter(long visit, LocalDateTime now) {
-            update("UPDATE visitas SET estado='DENTRO',entrada=? WHERE id=?", now, visit);
+            update("UPDATE visitas SET estado='DENTRO',entrada=?,qr_hash=NULL WHERE id=?", now, visit);
         }
 
         @Override
@@ -266,18 +332,29 @@ public final class JdbcStore implements Store {
                 filters.append(" AND LOCATE(?,LOWER(").append(ReportQuery.searchColumn(report)).append("))>0");
                 params.add(search.toLowerCase(Locale.ROOT));
             }
-            return query("SELECT q.* FROM (" + sql + ") q" + filters + " ORDER BY q.ID DESC", rs -> {
-                int count = rs.getMetaData().getColumnCount();
-                List<String> columns = new ArrayList<>(count);
-                for (int i = 1; i <= count; i++) columns.add(rs.getMetaData().getColumnLabel(i));
-                List<List<String>> rows = new ArrayList<>();
-                while (rs.next()) {
-                    List<String> row = new ArrayList<>(count);
-                    for (int i = 1; i <= count; i++) row.add(Objects.toString(rs.getString(i), ""));
-                    rows.add(List.copyOf(row));
-                }
-                return new Data(List.copyOf(columns), List.copyOf(rows));
-            }, params.toArray());
+            return query("SELECT q.* FROM (" + sql + ") q" + filters + " ORDER BY q.ID DESC", JdbcUnit::readData, params.toArray());
+        }
+
+        private static Data readData(ResultSet rs) throws SQLException {
+            int count = rs.getMetaData().getColumnCount();
+            List<String> columns = new ArrayList<>(count);
+            for (int i = 1; i <= count; i++) columns.add(rs.getMetaData().getColumnLabel(i));
+            List<List<String>> rows = new ArrayList<>();
+            while (rs.next()) {
+                List<String> row = new ArrayList<>(count);
+                for (int i = 1; i <= count; i++) row.add(Objects.toString(rs.getString(i), ""));
+                rows.add(List.copyOf(row));
+            }
+            return new Data(List.copyOf(columns), List.copyOf(rows));
+        }
+
+        private void execute(String sql, Object... arguments) {
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                bind(statement, arguments);
+                statement.executeUpdate();
+            } catch (SQLException failure) {
+                throw new SqlFailure(failure);
+            }
         }
 
         private <T> T query(String sql, Read<T> reader, Object... arguments) {
