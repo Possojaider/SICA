@@ -48,6 +48,9 @@ public final class JdbcStore implements Store {
 
     private static SicaException translate(SQLException failure) {
         LOG.error("Operación MySQL fallida: SQLState={}, código={}", failure.getSQLState(), failure.getErrorCode());
+        if (failure.getErrorCode() == 1142 || failure.getErrorCode() == 1143) {
+            return new SicaException("Faltan permisos de MySQL para operar SICA. Actualiza los privilegios de instalación.");
+        }
         if (failure.getErrorCode() == 1062) return new SicaException("Ya existe un registro con ese identificador único.");
         if (failure.getErrorCode() == 1205 || failure.getErrorCode() == 1213) return new SicaException("Conflicto de concurrencia. Intenta de nuevo.");
         if (failure.getSQLState() != null && failure.getSQLState().startsWith("08")) {

@@ -36,6 +36,8 @@ class UiRenderingTest {
     private Session session;
     private final String database = "sica_ui_" + UUID.randomUUID().toString().replace("-", "");
     private String serverUrl, databaseUrl, dbUser, dbPassword;
+    private final String appUser = "sica_ui_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+    private final String appPassword = com.sica.domain.CredentialCodes.generate();
     private final String adminEmail = "admin@ui.sica.local";
     private final String adminPassword = "Ui-Admin-seguro-2026";
     private Configuration configuration;
@@ -69,7 +71,20 @@ class UiRenderingTest {
                 }
             }
         }
-        configuration = new Configuration(databaseUrl, dbUser, dbPassword, java.time.Clock.system(java.time.ZoneId.of("America/Bogota")));
+        try (var connection = DriverManager.getConnection(serverUrl, dbUser, dbPassword)) {
+            try (var create = connection.prepareStatement("CREATE USER '" + appUser + "'@'%' IDENTIFIED BY ?")) {
+                create.setString(1, appPassword);
+                create.executeUpdate();
+            }
+            try (var input = getClass().getResourceAsStream("/db/privileges.sql");
+                 var statement = connection.createStatement()) {
+                String grants = new String(Objects.requireNonNull(input).readAllBytes(), StandardCharsets.UTF_8)
+                        .replace("ON sica.", "ON " + database + ".")
+                        .replace("'sica'@'%'", "'" + appUser + "'@'%'");
+                for (String query : grants.split(";")) if (!query.isBlank()) statement.execute(query);
+            }
+        }
+        configuration = new Configuration(databaseUrl, appUser, appPassword, java.time.Clock.system(java.time.ZoneId.of("America/Bogota")));
         sica = ApplicationFactory.create(configuration);
         sica.bootstrap(adminEmail, adminPassword);
         session = sica.login(adminEmail, adminPassword);
@@ -87,6 +102,7 @@ class UiRenderingTest {
             try (var connection = DriverManager.getConnection(serverUrl, dbUser, dbPassword);
                  var statement = connection.createStatement()) {
                 statement.execute("DROP DATABASE IF EXISTS " + database);
+                statement.execute("DROP USER IF EXISTS '" + appUser + "'@'%'");
             }
         }
     }
