@@ -1,32 +1,71 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.*?>
 <?import javafx.geometry.Insets?>
-<BorderPane xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.sica.presentation.LoginController" styleClass="login-root">
-  <left>
-    <VBox prefWidth="420" spacing="24" styleClass="login-brand">
-      <padding><Insets top="70" right="48" bottom="48" left="48"/></padding>
-      <Label text="SICA" styleClass="brand-large"/>
-      <Label text="Zona Acme" styleClass="brand-subtitle"/>
+<GridPane xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.sica.presentation.LoginController" styleClass="login-root">
+  <columnConstraints>
+    <ColumnConstraints percentWidth="46"/>
+    <ColumnConstraints percentWidth="54"/>
+  </columnConstraints>
+  <rowConstraints><RowConstraints percentHeight="100"/></rowConstraints>
+  <StackPane fx:id="hero" GridPane.columnIndex="0" styleClass="login-hero">
+    <Pane mouseTransparent="true">
+      <Circle centerX="25" centerY="735" radius="260" fill="#1b545b" opacity="0.45"/>
+      <Circle fx:id="ambientRing" centerX="70" centerY="700" radius="205" fill="TRANSPARENT" stroke="#50c9b2" strokeWidth="1" opacity="0.4"/>
+      <Circle centerX="70" centerY="700" radius="140" fill="TRANSPARENT" stroke="#8ce1cf" strokeWidth="1" opacity="0.12"/>
+      <Circle centerX="490" centerY="80" radius="140" fill="#1e4c59" opacity="0.4"/>
+      <Line startX="64" startY="545" endX="480" endY="129" stroke="#65b5b1" opacity="0.12"/>
+    </Pane>
+    <VBox spacing="22" styleClass="hero-content">
+      <padding><Insets top="42" right="54" bottom="38" left="54"/></padding>
+      <HBox alignment="CENTER_LEFT" spacing="14">
+        <StackPane prefWidth="43" prefHeight="43" maxWidth="43" maxHeight="43" styleClass="login-mark">
+          <Rectangle width="17" height="21" arcWidth="5" arcHeight="5" fill="TRANSPARENT" stroke="#a8eadb" strokeWidth="1.7"/>
+          <Line startX="0" startY="-4" endX="0" endY="5" stroke="#a8eadb" strokeWidth="1.7" translateX="4"/>
+        </StackPane>
+        <Label text="SICA" styleClass="login-wordmark"/>
+      </HBox>
       <Region VBox.vgrow="ALWAYS"/>
-      <Label text="Control de acceso&#10;con trazabilidad." wrapText="true" styleClass="login-heading"/>
-      <Label text="Personas, autorizaciones y visitas en un solo lugar." wrapText="true" styleClass="brand-subtitle"/>
-    </VBox>
-  </left>
-  <center>
-    <VBox alignment="CENTER" spacing="16" maxWidth="490">
-      <padding><Insets top="60" right="60" bottom="60" left="60"/></padding>
-      <Label text="Bienvenido" styleClass="page-title"/>
-      <Label text="Ingresa con tu cuenta de seguridad." styleClass="muted"/>
-      <VBox spacing="7">
-        <Label text="Correo electrónico"/>
-        <TextField fx:id="email" promptText="nombre@empresa.com" onAction="#login"/>
-        <Label text="Contraseña"/>
-        <PasswordField fx:id="password" promptText="Tu contraseña" onAction="#login"/>
+      <VBox spacing="20">
+        <Label text="ZONA ACME" styleClass="hero-eyebrow"/>
+        <Label text="Control de acceso&#10;para Zona Acme." wrapText="true" styleClass="hero-heading"/>
+        <Region prefWidth="54" maxWidth="54" prefHeight="3" styleClass="hero-rule"/>
+        <Label text="Personas, autorizaciones y visitas&#10;en un solo lugar." wrapText="true" styleClass="hero-description"/>
       </VBox>
-      <Button fx:id="submit" text="Iniciar sesión" onAction="#login" maxWidth="Infinity" defaultButton="true" styleClass="primary"/>
-      <ProgressIndicator fx:id="loading" visible="false" managed="false" prefWidth="26" prefHeight="26"/>
-      <Label fx:id="message" wrapText="true" styleClass="error"/>
+      <Region VBox.vgrow="ALWAYS"/>
+      <Label text="Sistema Integrado de Control de Acceso" wrapText="true" styleClass="hero-footer"/>
     </VBox>
-  </center>
-</BorderPane>
+  </StackPane>
+  <StackPane GridPane.columnIndex="1" styleClass="login-surface">
+    <padding><Insets top="28" right="42" bottom="28" left="42"/></padding>
+    <VBox fx:id="loginCard" maxWidth="460" maxHeight="-Infinity" spacing="20" styleClass="login-card">
+      <VBox spacing="8">
+        <Label fx:id="welcome" text="Inicia sesión" styleClass="login-title"/>
+        <Label text="Ingresa con tu cuenta para acceder a SICA." wrapText="true" styleClass="login-subtitle"/>
+      </VBox>
+      <VBox spacing="8">
+        <Label text="Correo electrónico" labelFor="$email" styleClass="login-label"/>
+        <TextField fx:id="email" promptText="nombre@empresa.com" onAction="#login" styleClass="login-field"/>
+        <Region prefHeight="4"/>
+        <Label text="Contraseña" labelFor="$password" styleClass="login-label"/>
+        <HBox fx:id="passwordFrame" alignment="CENTER_LEFT" spacing="4" styleClass="login-password-frame">
+          <StackPane HBox.hgrow="ALWAYS">
+            <PasswordField fx:id="password" promptText="Tu contraseña" onAction="#login" styleClass="login-password"/>
+            <TextField fx:id="visiblePassword" promptText="Tu contraseña" onAction="#login" visible="false" managed="false" styleClass="login-password"/>
+          </StackPane>
+          <Button fx:id="visibilityToggle" text="Mostrar" onAction="#togglePassword" focusTraversable="false" styleClass="password-toggle"/>
+        </HBox>
+      </VBox>
+      <VBox spacing="7">
+        <CheckBox fx:id="remember" text="Recordar usuario y contraseña" onAction="#rememberChanged" styleClass="remember-check"/>
+        <Label fx:id="storageHint" wrapText="true" styleClass="login-storage-hint"/>
+        <Button fx:id="forget" text="Olvidar datos guardados" onAction="#forgetCredentials" visible="false" managed="false" styleClass="forget-link"/>
+      </VBox>
+      <Button fx:id="submit" text="Iniciar sesión" onAction="#login" maxWidth="Infinity" defaultButton="true" styleClass="login-submit">
+        <graphic><ProgressIndicator fx:id="loading" visible="false" managed="false" prefWidth="18" prefHeight="18" maxWidth="18" maxHeight="18"/></graphic>
+      </Button>
+      <Label fx:id="message" wrapText="true" minHeight="20" styleClass="login-message"/>
+    </VBox>
+  </StackPane>
+</GridPane>
