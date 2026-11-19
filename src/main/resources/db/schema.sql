@@ -34,6 +34,7 @@ CREATE TABLE visitas (
   tipo ENUM('PREVIA','NO_ANUNCIADA','SIN_CARNET') NOT NULL, estado VARCHAR(32) NOT NULL,
   inicio DATETIME NOT NULL, vence DATETIME NOT NULL, entrada DATETIME, salida DATETIME,
   solicitado_por BIGINT NOT NULL, decidido_por BIGINT, decidido_en DATETIME,
+  motivo_decision VARCHAR(1000), qr_hash CHAR(64) UNIQUE,
   persona_dentro BIGINT GENERATED ALWAYS AS (CASE WHEN estado = 'DENTRO' THEN persona END) STORED,
   UNIQUE (persona_dentro), INDEX (empresa, estado, inicio), INDEX (persona, estado),
   FOREIGN KEY (persona) REFERENCES personas(id), FOREIGN KEY (empresa) REFERENCES empresas(id),
@@ -57,3 +58,10 @@ CREATE TRIGGER auditoria_sin_update BEFORE UPDATE ON bitacora_auditoria FOR EACH
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La auditoría solo admite inserciones';
 CREATE TRIGGER auditoria_sin_delete BEFORE DELETE ON bitacora_auditoria FOR EACH ROW
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La auditoría solo admite inserciones';
+
+CREATE TABLE notificaciones (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT, usuario BIGINT NOT NULL, visita BIGINT NOT NULL,
+  evento VARCHAR(32) NOT NULL, mensaje VARCHAR(500) NOT NULL, fecha DATETIME NOT NULL,
+  leida_en DATETIME, UNIQUE (usuario, visita, evento), INDEX (usuario, leida_en, id),
+  FOREIGN KEY (usuario) REFERENCES usuarios(id), FOREIGN KEY (visita) REFERENCES visitas(id)
+);

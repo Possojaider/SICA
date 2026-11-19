@@ -9,7 +9,9 @@
       <Label text="SICA" styleClass="brand"/>
       <Label text="ZONA ACME" styleClass="sidebar-caption"/>
       <Separator/>
-      <VBox fx:id="navigation" spacing="5" VBox.vgrow="ALWAYS"/>
+      <ScrollPane fitToWidth="true" hbarPolicy="NEVER" VBox.vgrow="ALWAYS" styleClass="navigation-scroll">
+        <content><VBox fx:id="navigation" spacing="5"/></content>
+      </ScrollPane>
       <Button text="Cerrar sesión" onAction="#logout" maxWidth="Infinity" styleClass="nav-button"/>
     </VBox>
   </left>
@@ -38,7 +40,7 @@
         <Label fx:id="stateLabel" text="Estado"/>
         <ComboBox fx:id="stateFilter" prefWidth="190"/>
       </HBox>
-      <HBox fx:id="actions" spacing="9"/>
+      <FlowPane fx:id="actions" hgap="9" vgap="8"/>
       <TableView fx:id="table" VBox.vgrow="ALWAYS">
         <placeholder><Label text="Sin resultados para los filtros seleccionados."/></placeholder>
       </TableView>

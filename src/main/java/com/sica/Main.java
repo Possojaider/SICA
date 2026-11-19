@@ -14,6 +14,9 @@ public final class Main {
             if (Arrays.asList(args).contains("--init-db")) {
                 DatabaseInstaller.install(Configuration.environment());
                 System.out.println("Esquema y catálogos instalados.");
+            } else if (Arrays.asList(args).contains("--migrate-db")) {
+                DatabaseMigrator.upgrade(Configuration.environment());
+                System.out.println("Esquema actualizado. Aplica db/privileges.sql a la cuenta de aplicación.");
             } else if (Arrays.asList(args).contains("--create-admin")) {
                 var console = System.console();
                 String email = LocalEnvironment.load().get("SICA_ADMIN_EMAIL");

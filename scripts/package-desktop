@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-./mvnw -B -ntp package dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/app-input
+./mvnw -B -ntp package dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/app-input "$@"
 cp target/sica-1.0.0.jar target/app-input/
 # Cada ejecución conserva los paquetes previos en un directorio fechado.
 destination="target/desktop-$(date +%Y%m%d-%H%M%S)"

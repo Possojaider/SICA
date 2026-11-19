@@ -10,3 +10,4 @@ GRANT SELECT, INSERT, UPDATE ON sica.personas TO 'sica'@'%';
 GRANT SELECT, INSERT, UPDATE ON sica.visitas TO 'sica'@'%';
 GRANT SELECT, INSERT ON sica.incidentes TO 'sica'@'%';
 GRANT SELECT, INSERT ON sica.bitacora_auditoria TO 'sica'@'%';
+GRANT SELECT, INSERT, UPDATE ON sica.notificaciones TO 'sica'@'%';

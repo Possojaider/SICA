@@ -1,6 +1,7 @@
 package com.sica.application;
 
 import com.sica.domain.AccessPolicy;
+import com.sica.domain.CredentialCodes;
 import com.sica.domain.port.out.PasswordHasher;
 import com.sica.domain.SicaException;
 import com.sica.domain.Session;
@@ -172,42 +173,94 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
             String state = type == AccessPolicy.PREVIA ? "APROBADA" : "PENDIENTE";
             long id = tx.createVisit(person, company, type, state, start, end, actor.id(), now);
             tx.audit(actor.id(), "CREAR", "visitas", id, type + " / " + state);
-            if (type == AccessPolicy.PREVIA) tx.audit(actor.id(), "APROBAR", "visitas", id, "Registro anticipado");
+            if (type == AccessPolicy.PREVIA) {
+                tx.audit(actor.id(), "APROBAR", "visitas", id, "Registro anticipado autorizado");
+            } else {
+                tx.notifyRequest(id, company, now);
+            }
             return id;
         });
     }
 
-    public void decide(Session session, long id, boolean approve) {
+    public void decide(Session session, long id, boolean approve, String reason) {
         protectedOperation(session, "DECIDIR", (tx, actor) -> {
+            String explanation = required(reason, 1000);
             Visit visit = load(tx, id, true);
             scope(actor, visit.company());
             if (!"PENDIENTE".equals(visit.state())) throw new SicaException("La solicitud ya fue resuelta.");
             LocalDateTime now = LocalDateTime.now(clock);
             if (!now.isBefore(visit.expires())) throw new SicaException("La solicitud expiró.");
-            tx.decide(id, approve ? "APROBADA" : "RECHAZADA", actor.id(), now);
-            tx.audit(actor.id(), approve ? "APROBAR" : "RECHAZAR", "visitas", id, "Solicitud de ingreso");
+            String state = approve ? "APROBADA" : "RECHAZADA";
+            tx.decide(id, state, actor.id(), now, explanation);
+            tx.audit(actor.id(), approve ? "APROBAR" : "RECHAZAR", "visitas", id, explanation);
+            tx.notifyDecision(id, state, now);
             return null;
+        });
+    }
+
+    public long unreadNotifications(Session session) {
+        return protectedOperation(session, null, (tx, actor) -> tx.unreadNotifications(actor.id()));
+    }
+
+    public void markNotificationRead(Session session, long id) {
+        protectedOperation(session, null, (tx, actor) -> {
+            if (tx.markNotificationRead(actor.id(), id, currentTime())) {
+                tx.audit(actor.id(), "LEER_NOTIFICACION", "notificaciones", id, "Notificación leída");
+            }
+            return null;
+        });
+    }
+
+    public Credential issueCredential(Session session, long id) {
+        return protectedOperation(session, "QR_EMITIR", (tx, actor) -> {
+            Visit visit = load(tx, id, true);
+            scope(actor, visit.company());
+            if (!"APROBADA".equals(visit.state()) || !currentTime().isBefore(visit.expires())) {
+                throw new SicaException("Solo se puede emitir un QR para una visita aprobada y vigente.");
+            }
+            String code = CredentialCodes.generate();
+            tx.setCredential(id, CredentialCodes.digest(code));
+            tx.audit(actor.id(), "EMITIR_QR", "visitas", id, "Credencial temporal emitida o renovada");
+            return new Credential(id, code, visit.expires());
         });
     }
 
     public void checkIn(Session session, long id) {
         protectedOperation(session, "ACCESO", (tx, actor) -> {
-            Visit initial = load(tx, id, false);
-            Person person = tx.lockPerson(initial.person());
-            Visit visit = load(tx, id, true);
-            scope(actor, visit.company());
-            eligible(tx, person, visit.company());
-            LocalDateTime now = LocalDateTime.now(clock);
-            AccessPolicy.authorize(visit.state(), visit.start(), visit.expires(), now);
-            Visit previous = tx.inside(visit.person());
-            if (previous != null) {
-                tx.exit(previous.id(), "SALIDA_OLVIDADA", now);
-                tx.audit(actor.id(), "SALIDA_OLVIDADA", "visitas", previous.id(), "Regularizada al ingresar en visita " + id);
-            }
-            tx.enter(id, now);
-            tx.audit(actor.id(), "CHECK_IN", "visitas", id, "Ingreso registrado");
+            registerEntry(tx, actor, load(tx, id, false), null);
             return null;
         });
+    }
+
+    public void checkInWithCredential(Session session, String code) {
+        String hash = CredentialCodes.digest(code);
+        protectedOperation(session, "ACCESO", (tx, actor) -> {
+            Visit visit = tx.visitByCredential(hash);
+            if (visit == null) throw new SicaException("El QR no está disponible. Puede haber sido utilizado o renovado.");
+            registerEntry(tx, actor, visit, hash);
+            return null;
+        });
+    }
+
+    private void registerEntry(Unit tx, Account actor, Visit initial, String expectedHash) {
+        Person person = tx.lockPerson(initial.person());
+        Visit visit = load(tx, initial.id(), true);
+        scope(actor, visit.company());
+        if (expectedHash != null && !expectedHash.equals(tx.credentialHash(visit.id()))) {
+            throw new SicaException("El QR fue utilizado o renovado. Consulta la visita.");
+        }
+        eligible(tx, person, visit.company());
+        LocalDateTime now = currentTime();
+        AccessPolicy.authorize(visit.state(), visit.start(), visit.expires(), now);
+        Visit previous = tx.inside(visit.person());
+        if (previous != null) {
+            tx.exit(previous.id(), "SALIDA_OLVIDADA", now);
+            tx.audit(actor.id(), "SALIDA_OLVIDADA", "visitas", previous.id(),
+                    "Regularizada al ingresar en visita " + visit.id());
+        }
+        tx.enter(visit.id(), now);
+        tx.audit(actor.id(), "CHECK_IN", "visitas", visit.id(),
+                expectedHash == null ? "Ingreso registrado" : "Ingreso mediante credencial QR");
     }
 
     public void checkOut(Session session, long id) {
@@ -233,15 +286,18 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
 
     public Data report(Session session, Report report, String search, LocalDateTime from, LocalDateTime until) {
         String permission = switch (report) {
+            case NOTIFICACIONES -> null;
             case EMPRESAS, USUARIOS, INCIDENTES, AUDITORIA -> report.name();
             case PERSONAS -> "PERSONAS_LEER";
             case VISITAS, SOLICITUDES -> "VISITAS_LEER";
             default -> "REPORTES";
         };
         if (from != null && until != null && !until.isAfter(from)) throw new SicaException("El período del filtro no es válido.");
-        return protectedOperation(session, permission, (tx, actor) ->
-                tx.report(report, "FUNCIONARIO".equals(actor.role()) ? actor.company() : null,
-                        Objects.toString(search, "").strip(), from, until));
+        return protectedOperation(session, permission, (tx, actor) -> {
+            if (report == Report.NOTIFICACIONES) return tx.notifications(actor.id(), Objects.toString(search, ""), from, until);
+            return tx.report(report, "FUNCIONARIO".equals(actor.role()) ? actor.company() : null,
+                        Objects.toString(search, "").strip(), from, until);
+        });
     }
 
     private <T> T protectedOperation(Session session, String permission, BiFunction<Unit, Account, T> action) {

@@ -51,6 +51,26 @@ final class VisitEditor {
                 }, saved);
     }
 
+    void decide(long visit, boolean approve) {
+        new FormDialog(owner, (approve ? "Aprobar" : "Rechazar") + " solicitud " + visit)
+                .multiline("reason", "Motivo obligatorio")
+                .submitLabel(approve ? "Aprobar" : "Rechazar")
+                .show(tasks, values -> () -> {
+                    new com.sica.application.VisitCommand.Decide(visit, approve, values.get("reason")).execute(sica, session);
+                    return null;
+                }, saved);
+    }
+
+    void scan() {
+        new FormDialog(owner, "Registrar entrada mediante QR")
+                .text("code", "Código del lector o del QR", "")
+                .submitLabel("Registrar entrada")
+                .show(tasks, values -> () -> {
+                    sica.checkInWithCredential(session, values.get("code").strip());
+                    return null;
+                }, saved);
+    }
+
     void incident(String selectedVisit) {
         new FormDialog(owner, "Reportar incidente")
                 .text("visit", "ID de visita", selectedVisit)

@@ -8,12 +8,13 @@ final class ReportQuery {
     private static final String VISITS = """
             SELECT v.id ID, p.documento Documento, p.nombre Nombre, v.empresa Empresa, e.nombre Anfitrion,
               v.tipo Tipo, v.estado Estado, v.inicio Fecha, v.vence Vence, v.entrada Entrada, v.salida Salida,
-              v.decidido_en Decidido, p.foto Foto
+              v.decidido_en Decidido, p.foto Foto, v.decidido_por DecididoPor, v.motivo_decision Motivo
             FROM visitas v JOIN personas p ON p.id=v.persona JOIN empresas e ON e.id=v.empresa
             """;
 
     static String select(Report report) {
         return switch (report) {
+            case NOTIFICACIONES -> throw new IllegalArgumentException("La bandeja requiere el usuario destinatario.");
             case EMPRESAS -> "SELECT id ID,nit NIT,nombre Nombre,activo Activo FROM empresas";
             case PERSONAS -> """
                     SELECT p.id ID,p.documento Documento,p.nombre Nombre,p.tipo Tipo,p.empresa Empresa,
@@ -49,6 +50,7 @@ final class ReportQuery {
 
     static String searchColumn(Report report) {
         return switch (report) {
+            case NOTIFICACIONES -> "q.Mensaje";
             case EMPRESAS -> "CONCAT_WS(' ',q.ID,q.NIT,q.Nombre)";
             case PERSONAS -> "CONCAT_WS(' ',q.ID,q.Documento,q.Nombre,q.Organizacion,q.Estado)";
             case USUARIOS -> "CONCAT_WS(' ',q.ID,q.Correo,q.Nombre,q.Rol,q.Empresa)";

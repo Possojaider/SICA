@@ -24,14 +24,21 @@ final class FormDialog {
         dialog.setTitle(title);
         dialog.setHeaderText(title);
         dialog.getDialogPane().getButtonTypes().addAll(saveType, ButtonType.CANCEL);
+        dialog.getDialogPane().setId("sica-form");
         dialog.getDialogPane().getStylesheets().add(getClass().getResource("/css/sica.css").toExternalForm());
         fields.setHgap(16);
         fields.setVgap(12);
         fields.setPadding(new Insets(18));
         dialog.getDialogPane().setContent(fields);
         dialog.getDialogPane().setPrefWidth(610);
+        error.setId("form-error");
         error.setWrapText(true);
         error.getStyleClass().add("error");
+    }
+
+    FormDialog submitLabel(String label) {
+        ((Button) dialog.getDialogPane().lookupButton(saveType)).setText(label);
+        return this;
     }
 
     FormDialog text(String key, String label, String value) {
@@ -66,6 +73,7 @@ final class FormDialog {
     }
 
     private void add(String key, String label, Node input, Supplier<String> reader) {
+        input.setId(key);
         fields.add(new Label(label), 0, row);
         fields.add(input, 1, row++);
         inputs.put(key, reader);
@@ -74,6 +82,7 @@ final class FormDialog {
     void show(BackgroundTasks tasks, Function<Map<String, String>, Callable<?>> command, Runnable onSaved) {
         fields.add(error, 0, row, 2, 1);
         Button save = (Button) dialog.getDialogPane().lookupButton(saveType);
+        save.setId("form-save");
         Node cancel = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
         save.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
             event.consume();

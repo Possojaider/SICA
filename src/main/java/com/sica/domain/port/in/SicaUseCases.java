@@ -17,7 +17,11 @@ public interface SicaUseCases {
     long saveUser(Session session, Long id, UserForm form);
     void archive(Session session, Entity entity, long id);
     long request(Session session, long person, long company, AccessPolicy type, LocalDateTime start, LocalDateTime end);
-    void decide(Session session, long id, boolean approve);
+    void decide(Session session, long id, boolean approve, String reason);
+    long unreadNotifications(Session session);
+    void markNotificationRead(Session session, long id);
+    Credential issueCredential(Session session, long visit);
+    void checkInWithCredential(Session session, String code);
     void checkIn(Session session, long id);
     void checkOut(Session session, long id);
     long incident(Session session, long visit, String description);

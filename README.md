@@ -6,7 +6,7 @@ El proyecto se creó desde cero a partir de la especificación textual suministr
 
 ## Tecnologías
 
-Java 21, JavaFX 21 con FXML y CSS, Maven Wrapper 3.9.9, MySQL 8.4, JDBC con Connector/J, BCrypt con coste 12, SLF4J, Logback y JUnit 5. La ejecución de pruebas de integración utiliza MySQL real.
+Java 21, JavaFX 21 con FXML y CSS, Maven Wrapper 3.9.9, MySQL 8.4, JDBC con Connector/J, BCrypt con coste 12, ZXing para códigos QR, SLF4J, Logback y JUnit 5. La ejecución de pruebas de integración utiliza MySQL real.
 
 ## Puesta en marcha
 
@@ -140,6 +140,55 @@ Auditoría permite consultar acciones, usuario, tabla, identificador y detalles.
 
 Reportes incluye personas dentro, historial de entradas y salidas, visitas por fecha, decisiones, incidentes y auditoría de acuerdo con los permisos. Se filtra por búsqueda, fechas y estado. Exportar CSV vuelve a consultar los datos con autorización vigente y escribe UTF-8 con protección frente a fórmulas de hoja de cálculo.
 
+
+## Notificaciones, motivos de decisión y QR
+
+### Bandeja persistente
+
+Cada usuario dispone de una pantalla Notificaciones con fecha, visita, evento, mensaje y estado leído o sin leer. El encabezado muestra el contador de avisos sin leer y la pantalla se actualiza mediante el sondeo existente.
+
+Las solicitudes pendientes notifican a los usuarios activos con permiso DECIDIR. Los funcionarios reciben las solicitudes de su empresa. Una aprobación o rechazo avisa al solicitante y a los guardas autorizados para operar el acceso. La creación de la visita o su decisión, las notificaciones y la auditoría comparten transacción.
+
+Marcar como leída guarda la fecha de lectura y registra la acción una sola vez, incluso con lecturas simultáneas. Cada usuario accede a su propia bandeja. Consultar visita vuelve a validar los permisos y el alcance de empresa antes de mostrar los detalles.
+
+### Motivos de aprobación y rechazo
+
+Los botones Aprobar y Rechazar abren un formulario con motivo obligatorio, hasta 1000 caracteres. El texto se conserva junto al usuario y fecha de decisión, aparece en las columnas DecididoPor y Motivo de visitas e informes, y queda registrado en auditoría.
+
+El prerregistro guarda el motivo automático “Registro anticipado autorizado”. Las decisiones antiguas migradas se identifican como “Decisión anterior a la incorporación de motivos”.
+
+### Credenciales QR temporales
+
+El permiso granular QR_EMITIR se asigna inicialmente a Superusuario, Supervisor y Funcionario. El funcionario emite credenciales para visitas de su propia empresa. Las visitas deben estar aprobadas y conservar una fecha de vencimiento futura.
+
+1. Seleccionar la visita en Registro de visitas o Solicitudes.
+2. Elegir Emitir o renovar QR y confirmar. Una reemisión invalida el código anterior.
+3. Guardar la imagen PNG para entregar la credencial al visitante.
+4. En Entradas y salidas, el guarda utiliza Ingresar con QR para recibir el texto de un lector USB o pegarlo. También puede usar Ingresar con imagen QR para leer una imagen PNG o JPEG.
+5. La aplicación comprueba el permiso ACCESO, el horario, la aprobación, las restricciones de la persona y las empresas antes de registrar la entrada.
+
+El código contiene una credencial aleatoria de 256 bits. MySQL conserva su digest SHA-256 y el vencimiento de la visita. El texto del código queda fuera de informes y auditoría. Un ingreso correcto consume el código, incluyendo los ingresos registrados manualmente. Una imagen QR puede leerse en otro equipo conectado a la misma base. La hora de inicio también se comprueba al escanear un código emitido anticipadamente.
+
+El lector de imágenes admite archivos de hasta 10 MB y 16 millones de píxeles. El flujo admite lectores que escriben como teclado y archivos de imagen.
+
+### Actualizar una instalación existente
+
+Las instalaciones nuevas reciben los campos y la tabla adicionales desde schema.sql. Una instalación existente se actualiza con una cuenta administrativa mediante este comando.
+
+```sh
+SICA_DB_USER=root SICA_DB_PASSWORD='clave-administrativa' ./scripts/sica --migrate-db
+```
+
+Después, aplicar src/main/resources/db/privileges.sql para conceder acceso a la tabla de notificaciones. En el Compose incluido se puede ejecutar desde la raíz del proyecto.
+
+```sh
+docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot' < src/main/resources/db/privileges.sql
+```
+
+El migrador conserva las visitas y decisiones existentes, identifica los motivos históricos ausentes y crea avisos para las solicitudes pendientes vigentes. Un bloqueo de MySQL serializa las migraciones concurrentes y las comprobaciones de metadatos permiten repetir una actualización interrumpida. Las asignaciones de permiso personalizadas se conservan al repetir el comando. La creación de objetos usa DDL de MySQL, con confirmación implícita. Las actualizaciones de datos y sus registros de auditoría comparten transacción.
+
+La base local de este espacio de trabajo ya fue migrada y tiene los privilegios actualizados.
+
 ## Arquitectura hexagonal y MVC
 
 El dominio contiene las políticas de acceso, los contratos de entrada y salida y los registros de datos. Los contratos carecen de dependencias de JavaFX, JDBC y MySQL.
@@ -169,21 +218,21 @@ MVC organiza la presentación. FXML y CSS definen las vistas, los controladores 
 ```text
 src/main/java/com/sica/
   domain/
-    AccessPolicy, Session, SicaException
+    AccessPolicy, CredentialCodes, Session, SicaException
     port/in/SicaUseCases
     port/out/Store, PasswordHasher
   application/
     Sica, VisitCommand
   infrastructure/
     JdbcStore, ReportQuery, BcryptHasher, Configuration,
-    ApplicationFactory, DatabaseInstaller, CsvExporter, LocalEnvironment
+    ApplicationFactory, DatabaseInstaller, DatabaseMigrator, QrCodec, CsvExporter, LocalEnvironment
   presentation/
     DesktopApplication, LoginController, ShellController,
-    EntityEditor, VisitEditor, FormDialog, TablePresenter,
+    EntityEditor, VisitEditor, CredentialDialog, FormDialog, TablePresenter,
     DashboardViewModel, BackgroundTasks
   Main
 src/main/resources/
-  fxml/       login.fxml, shell.fxml
+  fxml/       login.fxml, shell.fxml, credential.fxml
   css/        sica.css
   db/         schema.sql, data.sql, privileges.sql
   logback.xml
@@ -223,6 +272,8 @@ erDiagram
     empresas ||--o{ usuarios : vincula
     empresas ||--o{ personas : emplea
     persona_estados_acceso ||--o{ personas : define
+    usuarios ||--o{ notificaciones : recibe
+    visitas ||--o{ notificaciones : genera
     personas ||--o{ visitas : realiza
     empresas ||--o{ visitas : recibe
     visita_estados ||--o{ visitas : define
@@ -260,7 +311,7 @@ Las fotografías se cargan en segundo plano desde la URL HTTPS y muestran un err
 
 `./scripts/test-mysql -B -ntp` inicia el MySQL del proyecto, toma la contraseña administrativa local y ejecuta también las pruebas de integración. Cada ejecución crea una base temporal con nombre aleatorio y la elimina al finalizar. La cuenta usada para esta suite necesita permisos para crear y eliminar esa base de pruebas.
 
-La prueba gráfica se habilita mediante `SICA_UI_TEST=true` y utiliza la cuenta administrativa de `.env`. Carga FXML, valida el login, recorre los módulos y genera imágenes de las vistas bajo `target/ui`.
+La prueba gráfica se habilita mediante `SICA_UI_TEST=true` y crea una base temporal propia con las credenciales administrativas de pruebas. Carga FXML, valida el login, comprueba los menús de los cuatro roles y ejecuta un flujo completo desde dos interfaces independientes. Las pruebas generan imágenes bajo `target/ui` y eliminan sus bases temporales al finalizar.
 
 ```sh
 SICA_UI_TEST=true ./scripts/test-mysql -B -ntp
@@ -268,7 +319,7 @@ SICA_UI_TEST=true ./scripts/test-mysql -B -ntp
 
 Para otro servidor se pueden definir `SICA_TEST_DB_URL`, `SICA_TEST_DB_USER` y `SICA_TEST_DB_PASSWORD` y ejecutar Maven directamente. La URL de pruebas debe apuntar al servidor sin seleccionar una base.
 
-La suite cubre autenticación, sesiones revocadas y falsificadas, usuarios inactivos, RBAC, límites horarios, los cuatro escenarios de acceso, decisiones, ámbito por empresa, duplicados, restricciones, incidentes, reportes, inyección SQL, BCrypt, CSV, concurrencia y rollback por fallos de auditoría. Los fallos SQL provocados por las pruebas de duplicados y auditoría producen entradas ERROR esperadas en el log.
+La suite cubre notificaciones privadas y persistentes, motivos de decisión, migración desde datos antiguos, reemisión y consumo concurrente de QR, lectura de imágenes, autenticación, sesiones revocadas y falsificadas, usuarios inactivos, RBAC, límites horarios, los cuatro escenarios de acceso, decisiones, ámbito por empresa, duplicados, restricciones, incidentes, reportes, inyección SQL, BCrypt, CSV, concurrencia y rollback por fallos de auditoría. Los fallos SQL provocados por las pruebas de duplicados y auditoría producen entradas ERROR esperadas en el log.
 
 ## Desarrollo por fases y Git
 
@@ -289,6 +340,6 @@ Para conectar el repositorio local a un repositorio de GitHub elegido por el pro
 
 ### Resultado de verificación en este equipo
 
-El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 28 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel y los reportes.
+El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 41 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
 
-El paquete de escritorio se inició con el runtime incluido. La herramienta de inspección nativa agotó el tiempo de espera también con otras aplicaciones del equipo, por lo que la revisión de las vistas se hizo mediante las pruebas de carga, navegación y renderizado JavaFX. La interacción manual con ventanas del sistema, como el selector de archivos CSV, queda pendiente de comprobación manual.
+El paquete de escritorio se inició con el runtime incluido. La herramienta de inspección nativa agotó el tiempo de espera también con otras aplicaciones del equipo, por lo que la revisión de las vistas se hizo mediante las pruebas de carga, navegación y renderizado JavaFX. Los controles JavaFX de solicitud, lectura de avisos, aprobación con motivo, emisión de QR e ingreso se probaron de extremo a extremo. Los selectores nativos de archivos CSV y PNG quedan pendientes de comprobación manual.

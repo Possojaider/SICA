@@ -15,11 +15,12 @@ public interface Store {
     record PersonForm(String document, String name, String type, Long company, String photo, String state) {}
     record UserForm(String email, String name, String hash, boolean active, String role, Long company) {}
     enum Entity { EMPRESAS, PERSONAS, USUARIOS }
-    enum Report { EMPRESAS, PERSONAS, USUARIOS, VISITAS, SOLICITUDES, DENTRO, HISTORIAL, DECISIONES, INCIDENTES, AUDITORIA }
+    enum Report { NOTIFICACIONES, EMPRESAS, PERSONAS, USUARIOS, VISITAS, SOLICITUDES, DENTRO, HISTORIAL, DECISIONES, INCIDENTES, AUDITORIA }
     record Data(List<String> columns, List<List<String>> rows) {}
     record Option(long id, String label) {
         @Override public String toString() { return label + " · " + id; }
     }
+    record Credential(long visit, String code, LocalDateTime expires) {}
     record Statistics(long inside, long pending, long approved, long incidents) {}
 
     <T> T transaction(Function<Unit, T> operation);
@@ -35,7 +36,15 @@ public interface Store {
         Visit inside(long person);
         long createVisit(long person, long company, AccessPolicy type, String state, LocalDateTime start,
                          LocalDateTime end, long actor, LocalDateTime now);
-        void decide(long visit, String state, long actor, LocalDateTime now);
+        void decide(long visit, String state, long actor, LocalDateTime now, String reason);
+        void notifyRequest(long visit, long company, LocalDateTime now);
+        void notifyDecision(long visit, String state, LocalDateTime now);
+        Data notifications(long user, String search, LocalDateTime from, LocalDateTime until);
+        long unreadNotifications(long user);
+        boolean markNotificationRead(long user, long id, LocalDateTime now);
+        Visit visitByCredential(String hash);
+        String credentialHash(long visit);
+        void setCredential(long visit, String hash);
         void enter(long visit, LocalDateTime now);
         void exit(long visit, String state, LocalDateTime now);
         long company(Long id, Company form);
