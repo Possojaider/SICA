@@ -6,30 +6,36 @@ final class ReportQuery {
     private ReportQuery() {}
 
     private static final String VISITS = """
-            SELECT v.id ID, p.documento Documento, p.nombre Nombre, v.empresa Empresa, e.nombre Anfitrion,
-              v.tipo Tipo, v.estado Estado, v.inicio Fecha, v.vence Vence, v.entrada Entrada, v.salida Salida,
-              v.decidido_en Decidido, p.foto Foto, v.decidido_por DecididoPor, v.motivo_decision Motivo
-            FROM visitas v JOIN personas p ON p.id=v.persona JOIN empresas e ON e.id=v.empresa
+            SELECT v.id ID,p.documento_identidad Documento,p.nombre Nombre,v.empresa_id Empresa,e.nombre Anfitrion,
+              v.tipo_solicitud Tipo,ev.codigo Estado,v.inicio_programado Fecha,v.fin_programado Vence,
+              v.fecha_entrada Entrada,v.fecha_salida Salida,v.fecha_decision Decidido,p.url_foto Foto,
+              v.visita_aprobada_por DecididoPor,v.motivo_decision Motivo,v.vehiculo_placa Placa
+            FROM visitas v JOIN personas p ON p.id=v.persona_id LEFT JOIN empresas e ON e.id=v.empresa_id
+            LEFT JOIN visita_estados ev ON ev.id=v.estado_visita_id
             """;
 
     static String select(Report report) {
         return switch (report) {
             case NOTIFICACIONES -> throw new IllegalArgumentException("La bandeja requiere el usuario destinatario.");
-            case EMPRESAS -> "SELECT id ID,nit NIT,nombre Nombre,activo Activo FROM empresas";
+            case EMPRESAS -> "SELECT id ID,nit NIT,nombre Nombre,esta_activa Activo,contacto_principal Contacto FROM empresas";
             case PERSONAS -> """
-                    SELECT p.id ID,p.documento Documento,p.nombre Nombre,p.tipo Tipo,p.empresa Empresa,
-                           e.nombre Organizacion,p.foto Foto,p.estado Estado
-                    FROM personas p LEFT JOIN empresas e ON p.empresa=e.id
+                    SELECT p.id ID,p.documento_identidad Documento,p.nombre Nombre,UPPER(p.tipo_persona) Tipo,
+                      p.empresa_id Empresa,e.nombre Organizacion,p.url_foto Foto,ea.codigo Estado
+                    FROM personas p LEFT JOIN empresas e ON p.empresa_id=e.id
+                    LEFT JOIN persona_estados_acceso ea ON ea.id=p.estado_acceso_id
                     """;
-            case USUARIOS -> "SELECT id ID,correo Correo,nombre Nombre,activo Activo,rol Rol,empresa Empresa FROM usuarios";
+            case USUARIOS -> """
+                    SELECT u.id ID,u.email Correo,u.nombre Nombre,u.esta_activo Activo,r.codigo Rol,u.empresa_id Empresa
+                    FROM usuarios u LEFT JOIN roles r ON r.id=u.rol_id
+                    """;
             case VISITAS, SOLICITUDES, DENTRO, HISTORIAL, DECISIONES -> VISITS;
             case INCIDENTES -> """
-                    SELECT i.id ID,i.visita Visita,i.reportado_por ReportadoPor,i.fecha Fecha,i.descripcion Descripcion,
-                      v.empresa Empresa FROM incidentes i JOIN visitas v ON v.id=i.visita
+                    SELECT i.id ID,i.visita_id Visita,i.reportado_por_id ReportadoPor,i.fecha Fecha,i.descripcion Descripcion,
+                      v.empresa_id Empresa FROM incidentes i JOIN visitas v ON v.id=i.visita_id
                     """;
             case AUDITORIA -> """
-                    SELECT id ID,usuario Usuario,fecha Fecha,accion Accion,tabla_afectada Tabla,entidad Entidad,detalles Detalles
-                    FROM bitacora_auditoria
+                    SELECT id ID,usuario_id Usuario,fecha_hora Fecha,accion_realizada Accion,tabla_afectada Tabla,
+                      registro_id_afectado Entidad,detalles Detalles FROM bitacora_auditoria
                     """;
         };
     }

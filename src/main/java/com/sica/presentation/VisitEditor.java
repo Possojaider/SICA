@@ -39,6 +39,7 @@ final class VisitEditor {
                 .choices("person", "Persona · documento · ID", options, options.getFirst())
                 .choices("host", "Empresa anfitriona", hosts, hosts.getFirst())
                 .choices("type", "Escenario", types, types.getFirst())
+                .text("plate", "Placa del vehículo · opcional", "")
                 .text("start", "Inicio · AAAA-MM-DDTHH:MM", now.format(format))
                 .text("end", "Fin · AAAA-MM-DDTHH:MM", now.plusHours(1).format(format))
                 .show(tasks, values -> {
@@ -47,7 +48,7 @@ final class VisitEditor {
                     AccessPolicy type = AccessPolicy.valueOf(values.get("type"));
                     LocalDateTime start = LocalDateTime.parse(values.get("start"));
                     LocalDateTime end = LocalDateTime.parse(values.get("end"));
-                    return () -> sica.request(session, person, company, type, start, end);
+                    return () -> sica.request(session, person, company, type, start, end, values.get("plate"));
                 }, saved);
     }
 

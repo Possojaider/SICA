@@ -2,7 +2,6 @@ package com.sica.infrastructure;
 
 import com.sica.domain.SicaException;
 import java.sql.*;
-import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 
 public final class DatabaseMigrator {
@@ -10,79 +9,132 @@ public final class DatabaseMigrator {
 
     public static void upgrade(Configuration configuration) {
         try (Connection connection = DriverManager.getConnection(configuration.url(), configuration.user(), configuration.password())) {
-            String database = connection.getCatalog();
-            String lockName = database + "_upgrade_2";
-            try (PreparedStatement lock = connection.prepareStatement("SELECT GET_LOCK(?,10)")) {
-                lock.setString(1, lockName);
-                try (ResultSet result = lock.executeQuery()) {
-                    if (!result.next() || result.getInt(1) != 1) throw new SicaException("Otra instancia está migrando la base.");
+            if (!SchemaScripts.column(connection, "usuarios", "email")) {
+                throw new SicaException("La base usa el esquema anterior. Instala sica_acme y utiliza --import-legacy.");
+            }
+            try (var lock = connection.prepareStatement("SELECT GET_LOCK(?,10)")) {
+                lock.setString(1, connection.getCatalog() + "_upgrade");
+                try (var result = lock.executeQuery()) {
+                    if (!result.next() || result.getInt(1) != 1) throw new SicaException("Otra instancia está actualizando la base.");
                 }
             }
             try {
-                addColumn(connection, "motivo_decision", "VARCHAR(1000)");
-                addColumn(connection, "qr_hash", "CHAR(64) UNIQUE");
-                // Reutiliza exactamente la definición de la instalación nueva.
-                try (var input = DatabaseMigrator.class.getResourceAsStream("/db/schema.sql")) {
-                    if (input == null) throw new IOException("Esquema no disponible");
-                    String schema = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-                    String notifications = schema.substring(schema.indexOf("CREATE TABLE notificaciones"));
-                    try (Statement statement = connection.createStatement()) {
-                        statement.execute(notifications.replace("CREATE TABLE notificaciones", "CREATE TABLE IF NOT EXISTS notificaciones").strip());
-                        connection.setAutoCommit(false);
-                        int permissionAdded = statement.executeUpdate("INSERT IGNORE INTO permisos VALUES ('QR_EMITIR')");
-                        if (permissionAdded > 0) {
-                            statement.executeUpdate("INSERT INTO rol_permisos (rol,permiso) SELECT id,'QR_EMITIR' FROM roles WHERE id IN ('SUPER','SUPERVISOR','FUNCIONARIO')");
-                        }
-                        int legacyDecisions = statement.executeUpdate("""
-                                UPDATE visitas SET motivo_decision='Decisión anterior a la incorporación de motivos'
-                                WHERE decidido_en IS NOT NULL AND motivo_decision IS NULL
-                                """);
-                        int pendingNotifications = statement.executeUpdate("""
-                                INSERT IGNORE INTO notificaciones (usuario,visita,evento,mensaje,fecha)
-                                SELECT u.id,v.id,'SOLICITUD',CONCAT('Solicitud de ingreso pendiente · visita ',v.id),CURRENT_TIMESTAMP
-                                FROM usuarios u JOIN visitas v ON v.estado='PENDIENTE' AND v.vence>CURRENT_TIMESTAMP
-                                JOIN rol_permisos rp ON rp.rol=u.rol AND rp.permiso='DECIDIR'
-                                WHERE u.activo=TRUE AND (u.rol<>'FUNCIONARIO' OR u.empresa=v.empresa)
-                                """);
-                        if (pendingNotifications > 0) {
-                            try (PreparedStatement audit = connection.prepareStatement("""
-                                    INSERT INTO bitacora_auditoria (accion,tabla_afectada,detalles)
-                                    VALUES ('MIGRAR_NOTIFICACIONES','notificaciones',?)
-                                    """)) {
-                                audit.setString(1, "Avisos de solicitudes pendientes existentes: " + pendingNotifications);
-                                audit.executeUpdate();
+                addOperationalColumns(connection);
+                try (var statement = connection.createStatement()) {
+                    for (String sql : SchemaScripts.read("/db/schema.sql")) {
+                        if (sql.startsWith("CREATE TABLE ")) {
+                            statement.execute(sql.replaceFirst("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "));
+                        } else if (sql.startsWith("CREATE TRIGGER ")) {
+                            String name = sql.split("\\s+")[2];
+                            try (var exists = connection.prepareStatement(
+                                    "SELECT 1 FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=? AND TRIGGER_NAME=?")) {
+                                exists.setString(1, connection.getCatalog());
+                                exists.setString(2, name);
+                                try (var result = exists.executeQuery()) {
+                                    if (!result.next()) statement.execute(sql);
+                                }
                             }
                         }
-                        if (legacyDecisions > 0) {
-                            try (PreparedStatement audit = connection.prepareStatement("""
-                                    INSERT INTO bitacora_auditoria (accion,tabla_afectada,detalles)
-                                    VALUES ('MIGRAR_MOTIVOS','visitas',?)
-                                    """)) {
-                                audit.setString(1, "Decisiones históricas identificadas sin motivo original: " + legacyDecisions);
-                                audit.executeUpdate();
-                            }
-                        }
-                        connection.commit();
                     }
+                    populateCodes(statement);
+                    // Los catálogos y sus permisos iniciales se instalan una sola vez.
+                    try (var check = statement.executeQuery("SELECT 1 FROM migraciones_esquema WHERE version='base-academica-v3'")) {
+                        if (check.next()) return;
+                    }
+                    connection.setAutoCommit(false);
+                    SchemaScripts.execute(connection, "/db/data.sql", true);
+                    statement.executeUpdate("""
+                            UPDATE visitas v LEFT JOIN personas p ON p.id=v.persona_id
+                            SET v.empresa_id=COALESCE(v.empresa_id,p.empresa_id)
+                            """);
+                    int expired = statement.executeUpdate("""
+                            UPDATE visitas SET estado_visita_id=(SELECT id FROM visita_estados WHERE codigo='EXPIRADA'),
+                              inicio_programado=DATE_SUB(CURRENT_TIMESTAMP,INTERVAL 1 SECOND),fin_programado=CURRENT_TIMESTAMP
+                            WHERE (inicio_programado IS NULL OR fin_programado IS NULL)
+                              AND estado_visita_id IN (SELECT id FROM visita_estados WHERE codigo IN ('PENDIENTE','APROBADA'))
+                            """);
+                    if (expired > 0) statement.executeUpdate("""
+                            INSERT INTO bitacora_auditoria (accion_realizada,tabla_afectada,detalles)
+                            VALUES ('MIGRAR_VISITAS','visitas','Autorizaciones históricas sin horario identificadas como expiradas')
+                            """);
+                    statement.executeUpdate("INSERT IGNORE INTO migraciones_esquema (version,origen) VALUES ('base-academica-v3',DATABASE())");
+                    connection.commit();
                 }
             } finally {
-                try (PreparedStatement release = connection.prepareStatement("SELECT RELEASE_LOCK(?)")) {
-                    release.setString(1, lockName);
+                try (var release = connection.prepareStatement("SELECT RELEASE_LOCK(?)")) {
+                    release.setString(1, connection.getCatalog() + "_upgrade");
                     release.executeQuery().close();
                 }
             }
         } catch (SQLException | IOException failure) {
-            org.slf4j.LoggerFactory.getLogger(DatabaseMigrator.class).error("Falló la migración de esquema", failure);
-            throw new SicaException("No se pudo actualizar el esquema. Revisa la conexión y los permisos DDL de la cuenta administradora.");
+            org.slf4j.LoggerFactory.getLogger(DatabaseMigrator.class).error("Falló la adaptación del esquema académico", failure);
+            throw new SicaException("No se pudo adaptar la base. Revisa los permisos DDL y los registros técnicos.");
         }
     }
 
-    private static void addColumn(Connection connection, String column, String definition) throws SQLException {
-        try (ResultSet columns = connection.getMetaData().getColumns(connection.getCatalog(), null, "visitas", column)) {
-            if (columns.next()) return;
+    private static void addOperationalColumns(Connection c) throws SQLException {
+        SchemaScripts.addColumn(c, "roles", "codigo", "VARCHAR(32) UNIQUE");
+        SchemaScripts.addColumn(c, "permisos", "codigo", "VARCHAR(32) UNIQUE");
+        SchemaScripts.addColumn(c, "persona_estados_acceso", "codigo", "VARCHAR(24) UNIQUE");
+        SchemaScripts.addColumn(c, "visita_estados", "codigo", "VARCHAR(32) UNIQUE");
+        SchemaScripts.addColumn(c, "empresas", "nit", "VARCHAR(32) UNIQUE");
+        SchemaScripts.addColumn(c, "empresas", "esta_activa", "BOOLEAN NOT NULL DEFAULT TRUE");
+        SchemaScripts.addColumn(c, "usuarios", "empresa_id", "INT");
+        SchemaScripts.addColumn(c, "visitas", "empresa_id", "INT");
+        SchemaScripts.addColumn(c, "visitas", "tipo_solicitud", "ENUM('PREVIA','NO_ANUNCIADA','SIN_CARNET') NOT NULL DEFAULT 'NO_ANUNCIADA'");
+        SchemaScripts.addColumn(c, "visitas", "inicio_programado", "DATETIME");
+        SchemaScripts.addColumn(c, "visitas", "fin_programado", "DATETIME");
+        SchemaScripts.addColumn(c, "visitas", "solicitado_por_id", "INT");
+        SchemaScripts.addColumn(c, "visitas", "fecha_decision", "DATETIME");
+        SchemaScripts.addColumn(c, "visitas", "motivo_decision", "VARCHAR(1000)");
+        SchemaScripts.addColumn(c, "visitas", "qr_hash", "CHAR(64) UNIQUE");
+        SchemaScripts.addColumn(c, "visitas", "persona_dentro",
+                "INT GENERATED ALWAYS AS (CASE WHEN fecha_entrada IS NOT NULL AND fecha_salida IS NULL THEN persona_id END) STORED UNIQUE");
+        addForeignKey(c, "usuarios", "empresa_id", "empresas");
+        addForeignKey(c, "visitas", "empresa_id", "empresas");
+        addForeignKey(c, "visitas", "solicitado_por_id", "usuarios");
+    }
+
+    private static void addForeignKey(Connection c, String table, String column, String parent) throws SQLException {
+        try (var keys = c.getMetaData().getImportedKeys(c.getCatalog(), null, table)) {
+            while (keys.next()) if (column.equals(keys.getString("FKCOLUMN_NAME"))) return;
         }
-        try (Statement statement = connection.createStatement()) {
-            statement.execute("ALTER TABLE visitas ADD COLUMN " + column + " " + definition);
+        try (var statement = c.createStatement()) {
+            statement.execute("ALTER TABLE " + table + " ADD FOREIGN KEY (" + column + ") REFERENCES " + parent + "(id)");
         }
+    }
+
+    private static void populateCodes(Statement statement) throws SQLException {
+        statement.executeUpdate("""
+                UPDATE roles SET codigo=CASE nombre_rol
+                 WHEN 'Superusuario' THEN 'SUPER' WHEN 'Supervisor de Seguridad' THEN 'SUPERVISOR'
+                 WHEN 'Guarda de Seguridad' THEN 'GUARDA' WHEN 'Funcionario de Empresa' THEN 'FUNCIONARIO'
+                 ELSE CONCAT('ROL_',id) END WHERE codigo IS NULL
+                """);
+        statement.executeUpdate("""
+                UPDATE persona_estados_acceso SET codigo=CASE nombre_estado
+                 WHEN 'Activo' THEN 'HABILITADO' WHEN 'Con Prohibicion de Ingreso' THEN 'RESTRINGIDO'
+                 WHEN 'Baja' THEN 'BAJA' ELSE CONCAT('ESTADO_',id) END WHERE codigo IS NULL
+                """);
+        statement.executeUpdate("""
+                UPDATE visita_estados SET codigo=CASE nombre_estado
+                 WHEN 'Dentro' THEN 'DENTRO' WHEN 'Fuera' THEN 'CERRADA'
+                 WHEN 'Pendiente de Aprobacion' THEN 'PENDIENTE' WHEN 'Aprobado' THEN 'APROBADA'
+                 WHEN 'Rechazado' THEN 'RECHAZADA' WHEN 'Expirado' THEN 'EXPIRADA'
+                 WHEN 'Cerrada por Sistema (Salida Olvidada)' THEN 'SALIDA_OLVIDADA'
+                 ELSE CONCAT('ESTADO_',id) END WHERE codigo IS NULL
+                """);
+        // Conserva los permisos propios del esquema entregado antes de completar el catálogo.
+        statement.executeUpdate("""
+                UPDATE permisos SET codigo=CASE nombre_permiso
+                 WHEN 'gestionar_usuarios' THEN 'USUARIOS' WHEN 'gestionar_empresas' THEN 'EMPRESAS'
+                 WHEN 'gestionar_personas' THEN 'PERSONAS' WHEN 'consultar_personas' THEN 'PERSONAS_LEER'
+                 WHEN 'crear_persona' THEN 'PERSONAS_CREAR' WHEN 'consultar_visitas' THEN 'VISITAS_LEER'
+                 WHEN 'prerregistrar_invitado' THEN 'PRE_REGISTRAR' WHEN 'registrar_visita' THEN 'SOLICITAR'
+                 WHEN 'aprobar_rechazar_visita' THEN 'DECIDIR' WHEN 'registrar_entrada_salida' THEN 'ACCESO'
+                 WHEN 'registrar_consultar_incidentes' THEN 'INCIDENTES' WHEN 'generar_reporte_auditoria' THEN 'AUDITORIA'
+                 WHEN 'generar_reportes' THEN 'REPORTES' WHEN 'emitir_qr_visita' THEN 'QR_EMITIR'
+                 ELSE CONCAT('PERMISO_',id) END WHERE codigo IS NULL
+                """);
     }
 }
