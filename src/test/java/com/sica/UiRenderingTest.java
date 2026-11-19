@@ -66,7 +66,7 @@ class UiRenderingTest {
             for (String resource : List.of("/db/schema.sql", "/db/data.sql")) {
                 try (var input = getClass().getResourceAsStream(resource)) {
                     String script = new String(Objects.requireNonNull(input).readAllBytes(), StandardCharsets.UTF_8)
-                            .replace("sica", database);
+                            .replace("sica_acme", database);
                     for (String query : script.split(";")) if (!query.isBlank()) statement.execute(query);
                 }
             }
@@ -79,7 +79,7 @@ class UiRenderingTest {
             try (var input = getClass().getResourceAsStream("/db/privileges.sql");
                  var statement = connection.createStatement()) {
                 String grants = new String(Objects.requireNonNull(input).readAllBytes(), StandardCharsets.UTF_8)
-                        .replace("ON sica.", "ON " + database + ".")
+                        .replace("ON sica_acme.", "ON " + database + ".")
                         .replace("'sica'@'%'", "'" + appUser + "'@'%'");
                 for (String query : grants.split(";")) if (!query.isBlank()) statement.execute(query);
             }

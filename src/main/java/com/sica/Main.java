@@ -14,6 +14,13 @@ public final class Main {
             if (Arrays.asList(args).contains("--init-db")) {
                 DatabaseInstaller.install(Configuration.environment());
                 System.out.println("Esquema y catálogos instalados.");
+            } else if (Arrays.asList(args).contains("--import-legacy")) {
+                LegacyDatabaseImporter.importFrom(Configuration.environment(),
+                        LocalEnvironment.load().getOrDefault("SICA_LEGACY_DATABASE", "sica"));
+                System.out.println("Datos anteriores importados al esquema académico.");
+            } else if (Arrays.asList(args).contains("--seed-demo")) {
+                DemoDataInstaller.install(Configuration.environment());
+                System.out.println("Datos de ejemplo insertados.");
             } else if (Arrays.asList(args).contains("--migrate-db")) {
                 DatabaseMigrator.upgrade(Configuration.environment());
                 System.out.println("Esquema actualizado. Aplica db/privileges.sql a la cuenta de aplicación.");

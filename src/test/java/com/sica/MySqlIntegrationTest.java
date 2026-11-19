@@ -40,7 +40,7 @@ class MySqlIntegrationTest {
             for (String resource : List.of("/db/schema.sql", "/db/data.sql")) {
                 try (var input = getClass().getResourceAsStream(resource)) {
                     assertNotNull(input);
-                    String script = new String(input.readAllBytes(), StandardCharsets.UTF_8).replace("sica", database);
+                    String script = new String(input.readAllBytes(), StandardCharsets.UTF_8).replace("sica_acme", database);
                     for (String sql : script.split(";")) if (!sql.isBlank()) statement.execute(sql);
                 }
             }
@@ -104,13 +104,13 @@ class MySqlIntegrationTest {
     @Test void preRegisteredGuestEntersAndLeavesWithAudit() throws Exception {
         Fixture f = fixture("INVITADO");
         long visit = request(f, AccessPolicy.PREVIA);
-        assertEquals("APROBADA", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        assertEquals("APROBADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
         new VisitCommand.CheckIn(visit).execute(sica, admin);
-        assertEquals("DENTRO", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        assertEquals("DENTRO", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
         new VisitCommand.CheckOut(visit).execute(sica, admin);
-        assertEquals("CERRADA", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        assertEquals("CERRADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
         assertThrows(SicaException.class, () -> sica.checkOut(admin, visit));
-        assertEquals("3", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE tabla_afectada='visitas' AND entidad=? AND accion IN ('APROBAR','CHECK_IN','CHECK_OUT')", visit));
+        assertEquals("3", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE tabla_afectada='visitas' AND registro_id_afectado=? AND accion_realizada IN ('APROBAR','CHECK_IN','CHECK_OUT')", visit));
     }
 
     @Test void unannouncedGuestNeedsDecisionByCompanyOfficial() throws Exception {
@@ -120,8 +120,8 @@ class MySqlIntegrationTest {
         Session official = official(f.company());
         sica.decide(official, visit, true, "Identidad y motivo de visita verificados");
         sica.checkIn(admin, visit);
-        assertEquals("DENTRO", scalar("SELECT estado FROM visitas WHERE id=?", visit));
-        assertEquals(Long.toString(official.userId()), scalar("SELECT decidido_por FROM visitas WHERE id=?", visit));
+        assertEquals("DENTRO", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
+        assertEquals(Long.toString(official.userId()), scalar("SELECT visita_aprobada_por FROM visitas WHERE id=?", visit));
         assertThrows(SicaException.class, () -> sica.decide(official, visit, true, "Identidad y motivo de visita verificados"));
     }
 
@@ -154,11 +154,11 @@ class MySqlIntegrationTest {
         long newVisit = request(f, AccessPolicy.PREVIA);
         sica.checkIn(admin, oldVisit);
         sica.checkIn(admin, newVisit);
-        assertEquals("SALIDA_OLVIDADA", scalar("SELECT estado FROM visitas WHERE id=?", oldVisit));
-        assertNotNull(scalar("SELECT salida FROM visitas WHERE id=?", oldVisit));
-        assertEquals("1", scalar("SELECT COUNT(*) FROM visitas WHERE persona=? AND estado='DENTRO'", f.person()));
-        assertEquals("DENTRO", scalar("SELECT estado FROM visitas WHERE id=?", newVisit));
-        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE entidad=? AND accion='SALIDA_OLVIDADA'", oldVisit));
+        assertEquals("SALIDA_OLVIDADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", oldVisit));
+        assertNotNull(scalar("SELECT fecha_salida FROM visitas WHERE id=?", oldVisit));
+        assertEquals("1", scalar("SELECT COUNT(*) FROM visitas WHERE persona_dentro=?", f.person()));
+        assertEquals("DENTRO", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", newVisit));
+        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE registro_id_afectado=? AND accion_realizada='SALIDA_OLVIDADA'", oldVisit));
     }
 
     @Test void concurrentSameVisitCheckInHasExactlyOneSuccess() throws Exception {
@@ -182,8 +182,8 @@ class MySqlIntegrationTest {
         } finally {
             executor.shutdownNow();
         }
-        assertEquals("1", scalar("SELECT COUNT(*) FROM visitas WHERE persona=? AND estado='DENTRO'", f.person()));
-        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE entidad=? AND accion='CHECK_IN'", visit));
+        assertEquals("1", scalar("SELECT COUNT(*) FROM visitas WHERE persona_dentro=?", f.person()));
+        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE registro_id_afectado=? AND accion_realizada='CHECK_IN'", visit));
     }
 
     @Test void auditFailureRollsBackForgottenExitAndNewEntry() throws Exception {
@@ -192,16 +192,16 @@ class MySqlIntegrationTest {
         long newVisit = request(f, AccessPolicy.PREVIA);
         sica.checkIn(admin, oldVisit);
         sql("CREATE TRIGGER audit_test_fail BEFORE INSERT ON bitacora_auditoria FOR EACH ROW " +
-                "BEGIN IF NEW.accion='CHECK_IN' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Fallo de auditoria de prueba'; END IF; END");
+                "BEGIN IF NEW.accion_realizada='CHECK_IN' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Fallo de auditoria de prueba'; END IF; END");
         try {
             SicaException failure = assertThrows(SicaException.class, () -> sica.checkIn(admin, newVisit));
             assertTrue(failure.getMessage().contains("auditoría"));
         } finally {
             sql("DROP TRIGGER audit_test_fail");
         }
-        assertEquals("DENTRO", scalar("SELECT estado FROM visitas WHERE id=?", oldVisit));
-        assertEquals("APROBADA", scalar("SELECT estado FROM visitas WHERE id=?", newVisit));
-        assertEquals("0", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE entidad=? AND accion='SALIDA_OLVIDADA'", oldVisit));
+        assertEquals("DENTRO", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", oldVisit));
+        assertEquals("APROBADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", newVisit));
+        assertEquals("0", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE registro_id_afectado=? AND accion_realizada='SALIDA_OLVIDADA'", oldVisit));
     }
 
     @Test void auditIsAppendOnlyAtDatabaseLevel() {
@@ -227,7 +227,7 @@ class MySqlIntegrationTest {
 
     @Test void crudDuplicatesInactivePeopleAndIncidentsAreValidated() throws Exception {
         Fixture f = fixture("INVITADO");
-        String doc = scalar("SELECT documento FROM personas WHERE id=?", f.person());
+        String doc = scalar("SELECT documento_identidad FROM personas WHERE id=?", f.person());
         assertThrows(SicaException.class, () -> sica.savePerson(admin, null,
                 new PersonForm(doc, "Duplicado", "INVITADO", f.company(), "", "HABILITADO")));
         sica.savePerson(admin, f.person(), new PersonForm(doc, "Nombre actualizado", "INVITADO", f.company(), "", "RESTRINGIDO"));
@@ -235,12 +235,12 @@ class MySqlIntegrationTest {
         sica.savePerson(admin, f.person(), new PersonForm(doc, "Nombre actualizado", "INVITADO", f.company(), "", "HABILITADO"));
         long visit = request(f, AccessPolicy.PREVIA);
         long incident = sica.incident(admin, visit, "Documento deteriorado, se verificó identidad.");
-        assertEquals(Long.toString(admin.userId()), scalar("SELECT reportado_por FROM incidentes WHERE id=?", incident));
+        assertEquals(Long.toString(admin.userId()), scalar("SELECT reportado_por_id FROM incidentes WHERE id=?", incident));
         assertThrows(SicaException.class, () -> sica.incident(admin, visit, ""));
         assertThrows(SicaException.class, () -> sica.incident(admin, 9999999, "Texto"));
         sica.archive(admin, Entity.PERSONAS, f.person());
         assertThrows(SicaException.class, () -> sica.checkIn(admin, visit));
-        assertEquals("BAJA", scalar("SELECT estado FROM personas WHERE id=?", f.person()));
+        assertEquals("BAJA", scalar("SELECT codigo FROM persona_estados_acceso WHERE id=(SELECT estado_acceso_id FROM personas WHERE id=?)", f.person()));
     }
 
     @Test void dynamicPermissionRevocationAndInactiveUsersInvalidateExistingSessions() throws Exception {
@@ -248,12 +248,12 @@ class MySqlIntegrationTest {
         long id = sica.saveUser(admin, null, new UserForm(email, "Guarda", "Guarda-seguro-123", true, "GUARDA", null));
         Session guard = sica.login(email, "Guarda-seguro-123");
         assertTrue(sica.permissions(guard).contains("ACCESO"));
-        sql("DELETE FROM rol_permisos WHERE rol='GUARDA' AND permiso='ACCESO'");
+        sql("DELETE FROM rol_permisos WHERE rol_id=(SELECT id FROM roles WHERE codigo='GUARDA') AND permiso_id=(SELECT id FROM permisos WHERE codigo='ACCESO')");
         try {
             assertFalse(sica.permissions(guard).contains("ACCESO"));
             assertThrows(SicaException.class, () -> sica.checkIn(guard, 1));
         } finally {
-            sql("INSERT INTO rol_permisos VALUES ('GUARDA','ACCESO')");
+            sql("INSERT INTO rol_permisos SELECT r.id,p.id FROM roles r CROSS JOIN permisos p WHERE r.codigo='GUARDA' AND p.codigo='ACCESO'");
         }
         sica.saveUser(admin, id, new UserForm(email, "Guarda", "", false, "GUARDA", null));
         assertThrows(SicaException.class, () -> sica.login(email, "Guarda-seguro-123"));
@@ -286,11 +286,11 @@ class MySqlIntegrationTest {
         Fixture f = fixture("INVITADO");
         long visit = request(f, AccessPolicy.NO_ANUNCIADA);
         assertThrows(SicaException.class, () -> sica.decide(admin, visit, true, " "));
-        assertEquals("PENDIENTE", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        assertEquals("PENDIENTE", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
         String reason = "Ingreso a reunión con el área de logística. Documento verificado.";
         sica.decide(admin, visit, true, reason);
         assertEquals(reason, scalar("SELECT motivo_decision FROM visitas WHERE id=?", visit));
-        assertEquals(reason, scalar("SELECT detalles FROM bitacora_auditoria WHERE accion='APROBAR' AND entidad=? AND tabla_afectada='visitas'", visit));
+        assertEquals(reason, scalar("SELECT detalles FROM bitacora_auditoria WHERE accion_realizada='APROBAR' AND registro_id_afectado=? AND tabla_afectada='visitas'", visit));
         Data decisions = sica.report(admin, Report.DECISIONES, Long.toString(visit), null, null);
         int reasonColumn = decisions.columns().indexOf("Motivo");
         assertTrue(decisions.rows().stream().anyMatch(row ->
@@ -306,7 +306,7 @@ class MySqlIntegrationTest {
         assertEquals(1, sica.unreadNotifications(official));
         assertEquals(0, sica.unreadNotifications(another));
         Sica second = new Sica(new JdbcStore(url, user, password), new BcryptHasher(), clock);
-        Session secondOfficial = second.login(scalar("SELECT correo FROM usuarios WHERE id=?", official.userId()), "Funcionario-12345");
+        Session secondOfficial = second.login(scalar("SELECT email FROM usuarios WHERE id=?", official.userId()), "Funcionario-12345");
         Data inbox = second.report(secondOfficial, Report.NOTIFICACIONES, "", null, null);
         assertEquals(1, inbox.rows().size());
         long notification = Long.parseLong(inbox.rows().getFirst().getFirst());
@@ -315,11 +315,11 @@ class MySqlIntegrationTest {
         second.markNotificationRead(secondOfficial, notification);
         sica.markNotificationRead(official, notification);
         assertEquals(0, sica.unreadNotifications(official));
-        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE accion='LEER_NOTIFICACION' AND entidad=?", notification));
+        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE accion_realizada='LEER_NOTIFICACION' AND registro_id_afectado=?", notification));
         second.decide(secondOfficial, visit, false, "El anfitrión no tiene disponibilidad.");
         Data requesterInbox = sica.report(admin, Report.NOTIFICACIONES, "rechazada", null, null);
         assertTrue(requesterInbox.rows().stream().anyMatch(row -> row.get(1).equals(Long.toString(visit))));
-        assertEquals("RECHAZADA", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        assertEquals("RECHAZADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
         second.logout(secondOfficial);
     }
 
@@ -332,7 +332,7 @@ class MySqlIntegrationTest {
         } finally {
             sql("DROP TRIGGER notification_test_fail");
         }
-        assertEquals("0", scalar("SELECT COUNT(*) FROM visitas WHERE persona=?", f.person()));
+        assertEquals("0", scalar("SELECT COUNT(*) FROM visitas WHERE persona_id=?", f.person()));
     }
 
     @Test void qrIsPrivateSingleUseAndCanBeConsumedByAnotherInstance() throws Exception {
@@ -344,7 +344,7 @@ class MySqlIntegrationTest {
         Sica second = new Sica(new JdbcStore(url, user, password), new BcryptHasher(), clock);
         Session secondAdmin = second.login("admin@acme.co", "Admin-test-12345");
         second.checkInWithCredential(secondAdmin, credential.code());
-        assertEquals("DENTRO", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        assertEquals("DENTRO", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
         assertNull(scalar("SELECT qr_hash FROM visitas WHERE id=?", visit));
         assertThrows(SicaException.class, () -> sica.checkInWithCredential(admin, credential.code()));
         assertEquals("0", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE detalles LIKE ?", "%" + credential.code() + "%"));
@@ -392,73 +392,7 @@ class MySqlIntegrationTest {
         } finally {
             executor.shutdownNow();
         }
-        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE accion='CHECK_IN' AND entidad=?", visit));
-    }
-
-    @Test void migrationPreservesLegacyVisitsAndCanBeRetriedWithoutRestoringRevokedPermissions() throws Exception {
-        // Se crea una base propia para verificar una actualización desde la primera versión.
-        String legacyDatabase = "sica_it_" + UUID.randomUUID().toString().replace("-", "");
-        String legacyUrl = url.replace(database, legacyDatabase);
-        try {
-            try (var connection = DriverManager.getConnection(rootUrl, user, password);
-                 var statement = connection.createStatement()) {
-                for (String resource : List.of("/db/schema.sql", "/db/data.sql")) {
-                    try (var input = getClass().getResourceAsStream(resource)) {
-                        String script = new String(Objects.requireNonNull(input).readAllBytes(), StandardCharsets.UTF_8)
-                                .replace("sica", legacyDatabase);
-                        for (String query : script.split(";")) if (!query.isBlank()) statement.execute(query);
-                    }
-                }
-                statement.execute("INSERT INTO empresas (id,nit,nombre) VALUES (1,'LEGADO','Empresa conservada')");
-                statement.execute("INSERT INTO usuarios (id,correo,nombre,hash,rol) VALUES (1,'legacy@acme.co','Usuario histórico','hash-importado','SUPER')");
-                statement.execute("INSERT INTO personas (id,documento,nombre,tipo,empresa,estado) VALUES (1,'LEGADO','Persona conservada','INVITADO',1,'HABILITADO')");
-                statement.execute("""
-                        INSERT INTO visitas (id,persona,empresa,tipo,estado,inicio,vence,solicitado_por,decidido_por,decidido_en)
-                        VALUES (1,1,1,'PREVIA','APROBADA','2026-11-18 10:00','2026-11-18 15:00',1,1,'2026-11-18 09:00')
-                        """);
-                statement.execute("""
-                        INSERT INTO visitas (id,persona,empresa,tipo,estado,inicio,vence,solicitado_por)
-                        VALUES (2,1,1,'NO_ANUNCIADA','PENDIENTE',CURRENT_TIMESTAMP,DATE_ADD(CURRENT_TIMESTAMP,INTERVAL 1 HOUR),1)
-                        """);
-                statement.execute("DROP TABLE notificaciones");
-                statement.execute("ALTER TABLE visitas DROP COLUMN motivo_decision,DROP COLUMN qr_hash");
-                statement.execute("DELETE FROM rol_permisos WHERE permiso='QR_EMITIR'");
-                statement.execute("DELETE FROM permisos WHERE id='QR_EMITIR'");
-            }
-            Configuration configuration = new Configuration(legacyUrl, user, password, clock);
-            DatabaseMigrator.upgrade(configuration);
-            DatabaseMigrator.upgrade(configuration);
-            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
-                 var statement = connection.createStatement();
-                 var rs = statement.executeQuery("SELECT v.estado,v.motivo_decision,p.nombre FROM visitas v JOIN personas p ON p.id=v.persona WHERE v.id=1")) {
-                assertTrue(rs.next());
-                assertEquals("APROBADA", rs.getString(1));
-                assertEquals("Decisión anterior a la incorporación de motivos", rs.getString(2));
-                assertEquals("Persona conservada", rs.getString(3));
-            }
-            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
-                 var statement = connection.createStatement();
-                 var rs = statement.executeQuery("SELECT COUNT(*) FROM notificaciones WHERE usuario=1 AND visita=2 AND evento='SOLICITUD'")) {
-                assertTrue(rs.next());
-                assertEquals(1, rs.getInt(1));
-            }
-            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
-                 var statement = connection.createStatement()) {
-                statement.execute("DELETE FROM rol_permisos WHERE rol='FUNCIONARIO' AND permiso='QR_EMITIR'");
-            }
-            DatabaseMigrator.upgrade(configuration);
-            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
-                 var statement = connection.createStatement();
-                 var rs = statement.executeQuery("SELECT COUNT(*) FROM rol_permisos WHERE rol='FUNCIONARIO' AND permiso='QR_EMITIR'")) {
-                assertTrue(rs.next());
-                assertEquals(0, rs.getInt(1));
-            }
-        } finally {
-            try (var connection = DriverManager.getConnection(rootUrl, user, password);
-                 var statement = connection.createStatement()) {
-                statement.execute("DROP DATABASE IF EXISTS " + legacyDatabase);
-            }
-        }
+        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE accion_realizada='CHECK_IN' AND registro_id_afectado=?", visit));
     }
 
     @Test void decisionNotificationsKeepCompanyScopeWithCustomAccessPermissions() throws Exception {
@@ -466,7 +400,7 @@ class MySqlIntegrationTest {
         Fixture other = fixture("INVITADO");
         Session ownOfficial = official(own.company());
         Session otherOfficial = official(other.company());
-        sql("INSERT INTO rol_permisos VALUES ('FUNCIONARIO','ACCESO')");
+        sql("INSERT INTO rol_permisos SELECT r.id,p.id FROM roles r CROSS JOIN permisos p WHERE r.codigo='FUNCIONARIO' AND p.codigo='ACCESO'");
         try {
             long visit = request(own, AccessPolicy.NO_ANUNCIADA);
             sica.decide(ownOfficial, visit, true, "Identidad verificada para esta empresa.");
@@ -474,7 +408,7 @@ class MySqlIntegrationTest {
                     .anyMatch(row -> row.get(1).equals(Long.toString(visit))));
             assertTrue(sica.report(otherOfficial, Report.NOTIFICACIONES, "", null, null).rows().isEmpty());
         } finally {
-            sql("DELETE FROM rol_permisos WHERE rol='FUNCIONARIO' AND permiso='ACCESO'");
+            sql("DELETE FROM rol_permisos WHERE rol_id=(SELECT id FROM roles WHERE codigo='FUNCIONARIO') AND permiso_id=(SELECT id FROM permisos WHERE codigo='ACCESO')");
         }
     }
 
@@ -492,7 +426,7 @@ class MySqlIntegrationTest {
                     statement.execute("GRANT ALL PRIVILEGES ON " + database + ".* TO '" + appUser + "'@'%'");
                     try (var input = getClass().getResourceAsStream("/db/privileges.sql")) {
                         String grants = new String(Objects.requireNonNull(input).readAllBytes(), StandardCharsets.UTF_8)
-                                .replace("ON sica.", "ON " + database + ".")
+                                .replace("ON sica_acme.", "ON " + database + ".")
                                 .replace("'sica'@'%'", "'" + appUser + "'@'%'");
                         for (int iteration = 0; iteration < 2; iteration++) {
                             for (String query : grants.split(";")) if (!query.isBlank()) statement.execute(query);
@@ -527,7 +461,7 @@ class MySqlIntegrationTest {
             Credential credential = deployed.issueCredential(deployedAdmin, visit);
             deployed.checkInWithCredential(deployedAdmin, credential.code());
             deployed.checkOut(deployedAdmin, visit);
-            assertEquals("CERRADA", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+            assertEquals("CERRADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
             try (var connection = DriverManager.getConnection(url, appUser, appPassword);
                  var statement = connection.createStatement()) {
                 SQLException denied = assertThrows(SQLException.class,

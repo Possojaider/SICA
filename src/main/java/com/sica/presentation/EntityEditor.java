@@ -30,9 +30,10 @@ final class EntityEditor {
         new FormDialog(owner, id == null ? "Nueva empresa" : "Editar empresa")
                 .text("nit", "NIT", row.getOrDefault("NIT", ""))
                 .text("name", "Nombre", row.getOrDefault("Nombre", ""))
+                .text("contact", "Contacto principal", row.getOrDefault("Contacto", ""))
                 .choices("active", "Estado", List.of("Activa", "Inactiva"), "0".equals(row.get("Activo")) ? "Inactiva" : "Activa")
                 .show(tasks, values -> () -> sica.saveCompany(session, id,
-                        new Company(values.get("nit"), values.get("name"), values.get("active").equals("Activa"))), saved);
+                        new Company(values.get("nit"), values.get("name"), values.get("active").equals("Activa"), values.get("contact"))), saved);
     }
 
     void person(Map<String, String> row, boolean manage) {

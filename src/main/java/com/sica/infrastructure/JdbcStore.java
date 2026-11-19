@@ -81,7 +81,7 @@ public final class JdbcStore implements Store {
         }
         @Override
         public List<Option> companies(Long company) {
-            String sql = "SELECT id,nombre FROM empresas WHERE activo=TRUE" +
+            String sql = "SELECT id,nombre FROM empresas WHERE esta_activa=TRUE" +
                     (company == null ? "" : " AND id=?") + " ORDER BY nombre";
             return query(sql, rs -> {
                 List<Option> result = new ArrayList<>();
@@ -92,12 +92,12 @@ public final class JdbcStore implements Store {
 
         @Override
         public Statistics statistics(Long company) {
-            String scope = company == null ? "" : " AND empresa=?";
-            long inside = count("SELECT COUNT(*) FROM visitas WHERE estado='DENTRO'" + scope, company);
-            long pending = count("SELECT COUNT(*) FROM visitas WHERE estado='PENDIENTE' AND vence>CURRENT_TIMESTAMP" + scope, company);
-            long approved = count("SELECT COUNT(*) FROM visitas WHERE estado='APROBADA' AND vence>CURRENT_TIMESTAMP" + scope, company);
-            String incidentScope = company == null ? "" : " AND v.empresa=?";
-            long incidents = count("SELECT COUNT(*) FROM incidentes i JOIN visitas v ON v.id=i.visita WHERE DATE(i.fecha)=CURRENT_DATE" + incidentScope, company);
+            String scope = company == null ? "" : " AND empresa_id=?";
+            long inside = count("SELECT COUNT(*) FROM visitas WHERE estado_visita_id=(SELECT id FROM visita_estados WHERE codigo='DENTRO')" + scope, company);
+            long pending = count("SELECT COUNT(*) FROM visitas WHERE estado_visita_id=(SELECT id FROM visita_estados WHERE codigo='PENDIENTE') AND fin_programado>CURRENT_TIMESTAMP" + scope, company);
+            long approved = count("SELECT COUNT(*) FROM visitas WHERE estado_visita_id=(SELECT id FROM visita_estados WHERE codigo='APROBADA') AND fin_programado>CURRENT_TIMESTAMP" + scope, company);
+            String incidentScope = company == null ? "" : " AND v.empresa_id=?";
+            long incidents = count("SELECT COUNT(*) FROM incidentes i JOIN visitas v ON v.id=i.visita_id WHERE DATE(i.fecha)=CURRENT_DATE" + incidentScope, company);
             return new Statistics(inside, pending, approved, incidents);
         }
 
@@ -108,7 +108,7 @@ public final class JdbcStore implements Store {
 
         @Override
         public Account byEmail(String email) {
-            return accountWhere("correo", email);
+            return accountWhere("email", email);
         }
 
         @Override
@@ -117,8 +117,9 @@ public final class JdbcStore implements Store {
         }
 
         private Account accountWhere(String column, Object value) {
-            return query("SELECT u.id,u.hash,u.activo,u.rol,u.empresa,rp.permiso FROM usuarios u " +
-                    "LEFT JOIN rol_permisos rp ON rp.rol=u.rol WHERE u." + column + "=?", rs -> {
+            return query("SELECT u.id,u.password hash,u.esta_activo activo,r.codigo rol,u.empresa_id empresa,p.codigo permiso FROM usuarios u " +
+                    "LEFT JOIN roles r ON r.id=u.rol_id LEFT JOIN rol_permisos rp ON rp.rol_id=r.id " +
+                    "LEFT JOIN permisos p ON p.id=rp.permiso_id WHERE u." + column + "=?", rs -> {
                 if (!rs.next()) return null;
                 long id = rs.getLong("id");
                 String hash = rs.getString("hash");
@@ -136,25 +137,34 @@ public final class JdbcStore implements Store {
 
         @Override
         public boolean activeCompany(long id) {
-            return query("SELECT activo FROM empresas WHERE id=? FOR SHARE", rs -> rs.next() && rs.getBoolean(1), id);
+            return query("SELECT esta_activa FROM empresas WHERE id=? FOR SHARE", rs -> rs.next() && rs.getBoolean(1), id);
         }
 
         @Override
         public Person lockPerson(long id) {
-            return query("SELECT tipo,empresa,estado FROM personas WHERE id=? FOR UPDATE",
-                    rs -> rs.next() ? new Person(rs.getString(1), rs.getObject(2, Long.class), rs.getString(3)) : null, id);
+            query("SELECT id FROM personas WHERE id=? FOR UPDATE", rs -> rs.next(), id);
+            return query("""
+                    SELECT UPPER(p.tipo_persona),p.empresa_id,e.codigo FROM personas p
+                    LEFT JOIN persona_estados_acceso e ON e.id=p.estado_acceso_id WHERE p.id=?
+                    """, rs -> rs.next() ? new Person(rs.getString(1), rs.getObject(2, Long.class), rs.getString(3)) : null, id);
         }
+
+        private static final String VISIT_SELECT = """
+                SELECT v.id,v.persona_id,v.empresa_id,e.codigo,v.inicio_programado,v.fin_programado,v.fecha_entrada
+                FROM visitas v LEFT JOIN visita_estados e ON e.id=v.estado_visita_id
+                """;
 
         @Override
         public Visit visit(long id, boolean lock) {
-            return query("SELECT id,persona,empresa,estado,inicio,vence,entrada FROM visitas WHERE id=?" +
-                    (lock ? " FOR UPDATE" : ""), JdbcUnit::readVisit, id);
+            if (lock) query("SELECT id FROM visitas WHERE id=? FOR UPDATE", rs -> rs.next(), id);
+            return query(VISIT_SELECT + " WHERE v.id=?", JdbcUnit::readVisit, id);
         }
 
         @Override
         public Visit inside(long person) {
-            return query("SELECT id,persona,empresa,estado,inicio,vence,entrada FROM visitas WHERE persona_dentro=? FOR UPDATE",
-                    JdbcUnit::readVisit, person);
+            Long id = query("SELECT id FROM visitas WHERE persona_dentro=? FOR UPDATE",
+                    rs -> rs.next() ? rs.getLong(1) : null, person);
+            return id == null ? null : visit(id, false);
         }
 
         private static Visit readVisit(ResultSet rs) throws SQLException {
@@ -165,46 +175,54 @@ public final class JdbcStore implements Store {
 
         @Override
         public long createVisit(long person, long company, AccessPolicy type, String state, LocalDateTime start,
-                                LocalDateTime end, long actor, LocalDateTime now) {
+                                LocalDateTime end, long actor, LocalDateTime now, String plate) {
             boolean approved = state.equals("APROBADA");
-            return insert("INSERT INTO visitas (persona,empresa,tipo,estado,inicio,vence,solicitado_por,decidido_por,decidido_en,motivo_decision) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)", person, company, type.name(), state, start, end, actor,
-                    approved ? actor : null, approved ? now : null, approved ? "Registro anticipado autorizado" : null);
+            return insert("""
+                    INSERT INTO visitas (persona_id,empresa_id,tipo_solicitud,estado_visita_id,
+                      inicio_programado,fin_programado,solicitado_por_id,visita_aprobada_por,fecha_decision,motivo_decision,vehiculo_placa)
+                    VALUES (?,?,?,(SELECT id FROM visita_estados WHERE codigo=?),?,?,?,?,?,?,?)
+                    """, person, company, type.name(), state, start, end, actor,
+                    approved ? actor : null, approved ? now : null, approved ? "Registro anticipado autorizado" : null, plate);
         }
 
         @Override
         public void decide(long visit, String state, long actor, LocalDateTime now, String reason) {
-            update("UPDATE visitas SET estado=?,decidido_por=?,decidido_en=?,motivo_decision=? WHERE id=?",
-                    state, actor, now, reason, visit);
+            update("""
+                    UPDATE visitas SET estado_visita_id=(SELECT id FROM visita_estados WHERE codigo=?),
+                      visita_aprobada_por=?,fecha_decision=?,motivo_decision=? WHERE id=?
+                    """, state, actor, now, reason, visit);
         }
 
         @Override
         public void notifyRequest(long visit, long company, LocalDateTime now) {
             execute("""
-                    INSERT INTO notificaciones (usuario,visita,evento,mensaje,fecha)
+                    INSERT INTO notificaciones (usuario_id,visita_id,evento,mensaje,fecha)
                     SELECT u.id,?,'SOLICITUD',?,? FROM usuarios u
-                    JOIN rol_permisos rp ON rp.rol=u.rol AND rp.permiso='DECIDIR'
-                    WHERE u.activo=TRUE AND (u.rol<>'FUNCIONARIO' OR u.empresa=?)
+                    JOIN roles r ON r.id=u.rol_id JOIN rol_permisos rp ON rp.rol_id=r.id
+                    JOIN permisos p ON p.id=rp.permiso_id AND p.codigo='DECIDIR'
+                    WHERE u.esta_activo=TRUE AND (r.codigo<>'FUNCIONARIO' OR u.empresa_id=?)
                     """, visit, "Solicitud de ingreso pendiente · visita " + visit, now, company);
         }
 
         @Override
         public void notifyDecision(long visit, String state, LocalDateTime now) {
             execute("""
-                    INSERT INTO notificaciones (usuario,visita,evento,mensaje,fecha)
+                    INSERT INTO notificaciones (usuario_id,visita_id,evento,mensaje,fecha)
                     SELECT u.id,v.id,'DECISION',?,? FROM usuarios u JOIN visitas v ON v.id=?
-                    WHERE u.activo=TRUE AND (u.rol<>'FUNCIONARIO' OR u.empresa=v.empresa)
-                      AND (u.id=v.solicitado_por OR EXISTS (
-                      SELECT 1 FROM rol_permisos rp WHERE rp.rol=u.rol AND rp.permiso='ACCESO'))
+                    JOIN roles r ON r.id=u.rol_id
+                    WHERE u.esta_activo=TRUE AND (r.codigo<>'FUNCIONARIO' OR u.empresa_id=v.empresa_id)
+                      AND (u.id=v.solicitado_por_id OR EXISTS (
+                      SELECT 1 FROM rol_permisos rp JOIN permisos p ON p.id=rp.permiso_id
+                      WHERE rp.rol_id=u.rol_id AND p.codigo='ACCESO'))
                     """, "Solicitud " + state.toLowerCase(Locale.ROOT) + " · visita " + visit, now, visit);
         }
 
         @Override
         public Data notifications(long user, String search, LocalDateTime from, LocalDateTime until) {
             String sql = """
-                    SELECT id ID,visita Visita,fecha Fecha,evento Evento,mensaje Mensaje,
+                    SELECT id ID,visita_id Visita,fecha Fecha,evento Evento,mensaje Mensaje,
                       CASE WHEN leida_en IS NULL THEN 'SIN_LEER' ELSE 'LEIDA' END Estado,leida_en LeidaEn
-                    FROM notificaciones WHERE usuario=? AND LOCATE(?,LOWER(mensaje))>0
+                    FROM notificaciones WHERE usuario_id=? AND LOCATE(?,LOWER(mensaje))>0
                     """;
             List<Object> parameters = new ArrayList<>(List.of(user, search.strip().toLowerCase(Locale.ROOT)));
             if (from != null) { sql += " AND fecha>=?"; parameters.add(from); }
@@ -214,22 +232,22 @@ public final class JdbcStore implements Store {
 
         @Override
         public long unreadNotifications(long user) {
-            return count("SELECT COUNT(*) FROM notificaciones WHERE usuario=? AND leida_en IS NULL", user);
+            return count("SELECT COUNT(*) FROM notificaciones WHERE usuario_id=? AND leida_en IS NULL", user);
         }
 
         @Override
         public boolean markNotificationRead(long user, long id, LocalDateTime now) {
-            boolean unread = query("SELECT leida_en FROM notificaciones WHERE id=? AND usuario=? FOR UPDATE", rs -> {
+            boolean unread = query("SELECT leida_en FROM notificaciones WHERE id=? AND usuario_id=? FOR UPDATE", rs -> {
                 if (!rs.next()) throw new SicaException("La notificación no está disponible para tu usuario.");
                 return rs.getTimestamp(1) == null;
             }, id, user);
-            if (unread) update("UPDATE notificaciones SET leida_en=? WHERE id=? AND usuario=?", now, id, user);
+            if (unread) update("UPDATE notificaciones SET leida_en=? WHERE id=? AND usuario_id=?", now, id, user);
             return unread;
         }
 
         @Override
         public Visit visitByCredential(String hash) {
-            return query("SELECT id,persona,empresa,estado,inicio,vence,entrada FROM visitas WHERE qr_hash=?",
+            return query(VISIT_SELECT + " WHERE v.qr_hash=?",
                     JdbcUnit::readVisit, hash);
         }
 
@@ -245,60 +263,70 @@ public final class JdbcStore implements Store {
 
         @Override
         public void enter(long visit, LocalDateTime now) {
-            update("UPDATE visitas SET estado='DENTRO',entrada=?,qr_hash=NULL WHERE id=?", now, visit);
+            update("UPDATE visitas SET estado_visita_id=(SELECT id FROM visita_estados WHERE codigo='DENTRO'),fecha_entrada=?,qr_hash=NULL WHERE id=?", now, visit);
         }
 
         @Override
         public void exit(long visit, String state, LocalDateTime now) {
-            update("UPDATE visitas SET estado=?,salida=? WHERE id=?", state, now, visit);
+            update("UPDATE visitas SET estado_visita_id=(SELECT id FROM visita_estados WHERE codigo=?),fecha_salida=? WHERE id=?", state, now, visit);
         }
 
         @Override
         public long company(Long id, Company form) {
-            if (id == null) return insert("INSERT INTO empresas (nit,nombre,activo) VALUES (?,?,?)",
-                    form.taxId(), form.name(), form.active());
-            update("UPDATE empresas SET nit=?,nombre=?,activo=? WHERE id=?", form.taxId(), form.name(), form.active(), id);
+            if (id == null) return insert("INSERT INTO empresas (nit,nombre,esta_activa,contacto_principal) VALUES (?,?,?,?)",
+                    form.taxId(), form.name(), form.active(), form.contact());
+            update("UPDATE empresas SET nit=?,nombre=?,esta_activa=?,contacto_principal=? WHERE id=?",
+                    form.taxId(), form.name(), form.active(), form.contact(), id);
             return id;
         }
 
         @Override
         public long person(Long id, PersonForm form) {
-            if (id == null) return insert("INSERT INTO personas (documento,nombre,tipo,empresa,foto,estado) VALUES (?,?,?,?,?,?)",
-                    form.document(), form.name(), form.type(), form.company(), form.photo(), form.state());
-            update("UPDATE personas SET documento=?,nombre=?,tipo=?,empresa=?,foto=?,estado=? WHERE id=?",
-                    form.document(), form.name(), form.type(), form.company(), form.photo(), form.state(), id);
+            String type = "TRABAJADOR".equals(form.type()) ? "Trabajador" : "Invitado";
+            if (id == null) return insert("""
+                    INSERT INTO personas (documento_identidad,nombre,tipo_persona,empresa_id,url_foto,estado_acceso_id)
+                    VALUES (?,?,?,?,?,(SELECT id FROM persona_estados_acceso WHERE codigo=?))
+                    """, form.document(), form.name(), type, form.company(), form.photo(), form.state());
+            update("""
+                    UPDATE personas SET documento_identidad=?,nombre=?,tipo_persona=?,empresa_id=?,url_foto=?,
+                      estado_acceso_id=(SELECT id FROM persona_estados_acceso WHERE codigo=?) WHERE id=?
+                    """, form.document(), form.name(), type, form.company(), form.photo(), form.state(), id);
             return id;
         }
 
         @Override
         public long user(Long id, UserForm form) {
-            if (id == null) return insert("INSERT INTO usuarios (correo,nombre,hash,activo,rol,empresa) VALUES (?,?,?,?,?,?)",
-                    form.email(), form.name(), form.hash(), form.active(), form.role(), form.company());
-            update("UPDATE usuarios SET correo=?,nombre=?,hash=COALESCE(?,hash),activo=?,rol=?,empresa=? WHERE id=?",
-                    form.email(), form.name(), form.hash(), form.active(), form.role(), form.company(), id);
+            if (id == null) return insert("""
+                    INSERT INTO usuarios (email,nombre,password,esta_activo,rol_id,empresa_id)
+                    VALUES (?,?,?,?,(SELECT id FROM roles WHERE codigo=?),?)
+                    """, form.email(), form.name(), form.hash(), form.active(), form.role(), form.company());
+            update("""
+                    UPDATE usuarios SET email=?,nombre=?,password=COALESCE(?,password),esta_activo=?,
+                      rol_id=(SELECT id FROM roles WHERE codigo=?),empresa_id=? WHERE id=?
+                    """, form.email(), form.name(), form.hash(), form.active(), form.role(), form.company(), id);
             return id;
         }
 
         @Override
         public void archive(Entity entity, long id) {
             String sql = switch (entity) {
-                case USUARIOS -> "UPDATE usuarios SET activo=FALSE WHERE id=?";
-                case EMPRESAS -> "UPDATE empresas SET activo=FALSE WHERE id=?";
-                case PERSONAS -> "UPDATE personas SET estado='BAJA' WHERE id=?";
+                case USUARIOS -> "UPDATE usuarios SET esta_activo=FALSE WHERE id=?";
+                case EMPRESAS -> "UPDATE empresas SET esta_activa=FALSE WHERE id=?";
+                case PERSONAS -> "UPDATE personas SET estado_acceso_id=(SELECT id FROM persona_estados_acceso WHERE codigo='BAJA') WHERE id=?";
             };
             update(sql, id);
         }
 
         @Override
         public long incident(long visit, long reporter, String description, LocalDateTime now) {
-            return insert("INSERT INTO incidentes (visita,reportado_por,descripcion,fecha) VALUES (?,?,?,?)",
+            return insert("INSERT INTO incidentes (visita_id,reportado_por_id,descripcion,fecha) VALUES (?,?,?,?)",
                     visit, reporter, description, now);
         }
 
         @Override
         public void audit(Long actor, String action, String table, Long entity, String details) {
             try {
-                update("INSERT INTO bitacora_auditoria (usuario,accion,tabla_afectada,entidad,detalles) VALUES (?,?,?,?,?)",
+                update("INSERT INTO bitacora_auditoria (usuario_id,accion_realizada,tabla_afectada,registro_id_afectado,detalles) VALUES (?,?,?,?,?)",
                         actor, action, table, entity, details);
             } catch (SqlFailure failure) {
                 LOG.error("Error al registrar auditoría: SQLState={}, código={}",
