@@ -16,6 +16,8 @@ public final class DesktopApplication extends Application {
     private SicaUseCases sica;
     private BackgroundTasks tasks;
     private ShellController shell;
+    private LoginController login;
+    private com.sica.domain.port.out.SavedLoginStore savedLogins;
 
     @Override
     public void start(Stage stage) {
@@ -24,7 +26,11 @@ public final class DesktopApplication extends Application {
         stage.setTitle("SICA · Zona Acme");
         stage.setMinWidth(1040);
         stage.setMinHeight(700);
-        tasks.submit(() -> ApplicationFactory.create(Configuration.environment()), application -> {
+        tasks.submit(() -> {
+            Configuration configuration = Configuration.environment();
+            savedLogins = MacKeychainLoginStore.forConnection(configuration.url());
+            return ApplicationFactory.create(configuration);
+        }, application -> {
             sica = application;
             showLogin();
         }, failure -> {
@@ -41,10 +47,20 @@ public final class DesktopApplication extends Application {
             shell.close();
             shell = null;
         }
-        load("/fxml/login.fxml", new LoginController(sica, tasks, this::showShell));
+        login = new LoginController(sica, tasks, savedLogins, this::showShell, message -> {
+            Alert alert = new Alert(Alert.AlertType.WARNING, message);
+            alert.initOwner(stage);
+            alert.setHeaderText("Cuenta recordada");
+            alert.show();
+        });
+        load("/fxml/login.fxml", login);
     }
 
     private void showShell(Session session) {
+        if (login != null) {
+            login.close();
+            login = null;
+        }
         shell = new ShellController(sica, session, tasks, this::showLogin);
         load("/fxml/shell.fxml", shell);
     }
@@ -67,6 +83,7 @@ public final class DesktopApplication extends Application {
 
     @Override
     public void stop() {
+        if (login != null) login.close();
         if (shell != null) shell.close();
         if (tasks != null) tasks.close();
     }
