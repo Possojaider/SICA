@@ -85,6 +85,16 @@ El volumen `sica-data` conserva la información. `docker compose stop` detiene M
 
 ## Guía de uso
 
+### Recordar la cuenta de acceso
+
+En el inicio de sesión, la opción **Recordar usuario y contraseña** guarda ambos datos después de una autenticación correcta. La próxima apertura los recupera para completar el formulario. El botón Mostrar permite revisar la contraseña antes de ingresar.
+
+El almacenamiento utiliza el llavero del usuario de macOS y se separa por conexión a la base de datos. macOS puede solicitar autorización para acceder a la credencial. Si el guardado falla, la sesión se abre y se muestra un aviso. Las credenciales rechazadas durante el inicio de sesión no se guardan.
+
+Desmarcar Recordar elimina la credencial guardada y conserva lo que está escrito en el formulario. **Olvidar datos guardados** elimina la credencial del llavero y limpia el formulario. La casilla se habilita cuando está disponible la integración con macOS.
+
+La vista usa FXML, CSS, entrada animada, foco visual y un indicador de verificación. El adaptador `MacKeychainLoginStore` implementa el puerto `SavedLoginStore` mediante las API SecItem de Apple y JNA. [Documentación de Keychain Services](https://developer.apple.com/documentation/security/keychain-items).
+
 ### Administración y catálogos
 
 El superusuario inicia sesión, crea empresas activas y registra usuarios con su rol. Cada funcionario debe tener una empresa asignada. En Personas se registran trabajadores e invitados con documento único, nombre, empresa, estado de acceso y foto HTTPS opcional.
@@ -258,14 +268,14 @@ src/main/java/com/sica/
   domain/
     AccessPolicy, CredentialCodes, Session, SicaException
     port/in/SicaUseCases
-    port/out/Store, PasswordHasher
+    port/out/Store, PasswordHasher, SavedLoginStore
   application/
     Sica, VisitCommand
   infrastructure/
     JdbcStore, ReportQuery, BcryptHasher, Configuration,
     ApplicationFactory, DatabaseInstaller, DatabaseMigrator,
     LegacyDatabaseImporter, DemoDataInstaller, SchemaScripts,
-    QrCodec, CsvExporter, LocalEnvironment
+    QrCodec, CsvExporter, LocalEnvironment, MacKeychainLoginStore
   presentation/
     DesktopApplication, LoginController, ShellController,
     EntityEditor, VisitEditor, CredentialDialog, FormDialog, TablePresenter,
@@ -361,6 +371,14 @@ Para otro servidor se pueden definir `SICA_TEST_DB_URL`, `SICA_TEST_DB_USER` y `
 
 La suite comprueba también la reinstalación de privilegios y el flujo completo con una cuenta JDBC restringida, equivalente a la de la aplicación desplegada. Las interfaces de prueba también operan con estos permisos restringidos.
 
+Para incluir la prueba nativa de creación, lectura, actualización y eliminación en el llavero, ejecutar en macOS.
+
+```sh
+SICA_UI_TEST=true SICA_KEYCHAIN_TEST=true ./scripts/test-mysql -B -ntp
+```
+
+La prueba nativa usa una credencial temporal propia que se elimina al finalizar. La prueba de interfaz comprueba autocompletado, Mostrar/Ocultar, olvidar datos, rechazo de credenciales, escritura manual durante una lectura pendiente y fallo de guardado.
+
 La suite cubre la adaptación del esquema académico, los INSERT repetibles, los accesos de los cuatro usuarios de ejemplo, la importación del esquema anterior, contacto principal y placa del vehículo, notificaciones privadas y persistentes, motivos de decisión, migración desde datos antiguos, reemisión y consumo concurrente de QR, lectura de imágenes, autenticación, sesiones revocadas y falsificadas, usuarios inactivos, RBAC, límites horarios, los cuatro escenarios de acceso, decisiones, ámbito por empresa, duplicados, restricciones, incidentes, reportes, inyección SQL, BCrypt, CSV, concurrencia y rollback por fallos de auditoría. Los fallos SQL provocados por las pruebas de duplicados y auditoría producen entradas ERROR esperadas en el log.
 
 ## Desarrollo por fases y Git
@@ -382,6 +400,6 @@ Para conectar el repositorio local a un repositorio de GitHub elegido por el pro
 
 ### Resultado de verificación en este equipo
 
-El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 45 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
+El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 50 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
 
 La aplicación instalada se comprobó mediante inspección nativa. Se reprodujo y corrigió un permiso faltante sobre notificaciones causado por la interrupción del script al repetir la instalación de privilegios. El script ahora admite esa repetición y las consultas del panel y la bandeja quedaron verificadas con la cuenta real de aplicación. Los controles JavaFX de solicitud, lectura de avisos, aprobación con motivo, emisión de QR e ingreso se probaron de extremo a extremo. Los selectores nativos de archivos CSV y PNG quedan pendientes de comprobación manual.

@@ -4,6 +4,7 @@ import com.sica.domain.Session;
 import com.sica.domain.AccessPolicy;
 import com.sica.domain.SicaException;
 import com.sica.domain.port.out.Store.*;
+import com.sica.domain.port.out.SavedLoginStore;
 import com.sica.application.Sica;
 import javafx.stage.Window;
 import java.sql.*;
@@ -41,6 +42,7 @@ class UiRenderingTest {
     private final String adminEmail = "admin@ui.sica.local";
     private final String adminPassword = "Ui-Admin-seguro-2026";
     private Configuration configuration;
+    private final List<LoginController> loginControllers = new ArrayList<>();
     private final List<ShellController> controllers = new ArrayList<>();
     private final List<BackgroundTasks> workers = new ArrayList<>();
 
@@ -92,6 +94,7 @@ class UiRenderingTest {
 
     @AfterAll void closeJavaFx() throws Exception {
         fx(() -> {
+            for (LoginController controller : loginControllers) controller.close();
             for (ShellController controller : controllers) controller.close();
             return null;
         });
@@ -288,6 +291,157 @@ class UiRenderingTest {
         fx(() -> { guardController.close(); officialController.close(); return null; });
         sica.logout(guard);
         anotherApplication.logout(official);
+    }
+
+
+    private static final class MemoryLogins implements SavedLoginStore {
+        private volatile Login stored;
+        private boolean failSave;
+        private CountDownLatch readStarted;
+        private CountDownLatch releaseRead;
+        private int saves;
+
+        public boolean available() { return true; }
+        public Optional<Login> load() {
+            if (readStarted != null) {
+                readStarted.countDown();
+                try {
+                    if (!releaseRead.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Prueba de lectura bloqueada.");
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(failure);
+                }
+            }
+            return Optional.ofNullable(stored);
+        }
+        public void save(Login login) {
+            if (failSave) throw new SicaException("Llavero bloqueado en prueba.");
+            saves++;
+            stored = login;
+        }
+        public void clear() { stored = null; }
+    }
+
+    private Parent loginView(MemoryLogins memory, AtomicReference<Session> authenticated, java.util.function.Consumer<String> warning) throws Exception {
+        return fx(() -> {
+            LoginController controller = new LoginController(sica, tasks, memory, authenticated::set, warning);
+            loginControllers.add(controller);
+            return load("/fxml/login.fxml", controller);
+        });
+    }
+
+    private static void fillLogin(Parent view, String email, String password) {
+        ((TextField) view.lookup("#email")).setText(email);
+        ((PasswordField) view.lookup("#password")).setText(password);
+    }
+
+    @Test void rememberedCredentialsAutofillCanBeRevealedAndCanBeForgotten() throws Exception {
+        MemoryLogins memory = new MemoryLogins();
+        AtomicReference<Session> authenticated = new AtomicReference<>();
+        Parent first = loginView(memory, authenticated, warning -> fail(warning));
+        await(() -> fx(() -> !first.lookup("#remember").isDisabled()));
+        fx(() -> {
+            fillLogin(first, adminEmail, adminPassword);
+            ((CheckBox) first.lookup("#remember")).setSelected(true);
+            ((Button) first.lookup("#submit")).fire();
+            return null;
+        });
+        await(() -> authenticated.get() != null);
+        assertEquals(new SavedLoginStore.Login(adminEmail, adminPassword), memory.stored);
+        assertEquals(1, memory.saves);
+        sica.logout(authenticated.get());
+
+        Parent second = loginView(memory, new AtomicReference<>(), warning -> fail(warning));
+        await(() -> fx(() -> ((CheckBox) second.lookup("#remember")).isSelected()));
+        fx(() -> {
+            assertEquals(adminEmail, ((TextField) second.lookup("#email")).getText());
+            assertEquals(adminPassword, ((PasswordField) second.lookup("#password")).getText());
+            ((Button) second.lookup("#visibilityToggle")).fire();
+            assertTrue(second.lookup("#visiblePassword").isVisible());
+            assertEquals(adminPassword, ((TextField) second.lookup("#visiblePassword")).getText());
+            ((Button) second.lookup("#visibilityToggle")).fire();
+            assertFalse(second.lookup("#visiblePassword").isVisible());
+            return null;
+        });
+        snapshot(second, "login-recordado");
+        fx(() -> { ((CheckBox) second.lookup("#remember")).fire(); return null; });
+        await(() -> fx(() -> !second.lookup("#submit").isDisabled()) && memory.stored == null);
+        fx(() -> {
+            assertEquals(adminEmail, ((TextField) second.lookup("#email")).getText());
+            assertFalse(((CheckBox) second.lookup("#remember")).isSelected());
+            return null;
+        });
+        memory.stored = new SavedLoginStore.Login(adminEmail, adminPassword);
+        Parent third = loginView(memory, new AtomicReference<>(), warning -> fail(warning));
+        await(() -> fx(() -> third.lookup("#forget").isVisible()));
+        fx(() -> { ((Button) third.lookup("#forget")).fire(); return null; });
+        await(() -> fx(() -> !third.lookup("#submit").isDisabled()) && memory.stored == null);
+        fx(() -> {
+            assertEquals("", ((TextField) third.lookup("#email")).getText());
+            assertEquals("", ((PasswordField) third.lookup("#password")).getText());
+            return null;
+        });
+    }
+
+    @Test void rejectedLoginNeverSavesTheEnteredPassword() throws Exception {
+        MemoryLogins memory = new MemoryLogins();
+        Parent view = loginView(memory, new AtomicReference<>(), warning -> fail(warning));
+        await(() -> fx(() -> !view.lookup("#remember").isDisabled()));
+        fx(() -> {
+            fillLogin(view, adminEmail, "Contraseña-incorrecta-2026");
+            ((CheckBox) view.lookup("#remember")).setSelected(true);
+            ((Button) view.lookup("#submit")).fire();
+            return null;
+        });
+        await(() -> fx(() -> !view.lookup("#submit").isDisabled()));
+        assertNull(memory.stored);
+        assertEquals(0, memory.saves);
+        fx(() -> {
+            assertTrue(((Label) view.lookup("#message")).getText().contains("Credenciales incorrectas"));
+            assertTrue(((PasswordField) view.lookup("#password")).getText().isEmpty());
+            return null;
+        });
+    }
+
+    @Test void deniedCredentialStorageStillAllowsAnAuthenticatedSessionAndShowsAWarning() throws Exception {
+        MemoryLogins memory = new MemoryLogins();
+        memory.failSave = true;
+        AtomicReference<Session> authenticated = new AtomicReference<>();
+        AtomicReference<String> warning = new AtomicReference<>();
+        Parent view = loginView(memory, authenticated, warning::set);
+        await(() -> fx(() -> !view.lookup("#remember").isDisabled()));
+        fx(() -> {
+            fillLogin(view, adminEmail, adminPassword);
+            ((CheckBox) view.lookup("#remember")).setSelected(true);
+            ((Button) view.lookup("#submit")).fire();
+            return null;
+        });
+        await(() -> warning.get() != null);
+        assertNotNull(authenticated.get());
+        assertTrue(warning.get().contains("No se pudieron guardar"));
+        assertNull(memory.stored);
+        sica.logout(authenticated.get());
+    }
+
+    @Test void aLateCredentialReadNeverOverwritesWhatTheUserHasAlreadyTyped() throws Exception {
+        MemoryLogins memory = new MemoryLogins();
+        memory.stored = new SavedLoginStore.Login(adminEmail, adminPassword);
+        memory.readStarted = new CountDownLatch(1);
+        memory.releaseRead = new CountDownLatch(1);
+        Parent view = loginView(memory, new AtomicReference<>(), warning -> fail(warning));
+        assertTrue(memory.readStarted.await(10, TimeUnit.SECONDS));
+        try {
+            fx(() -> { fillLogin(view, "escrito@acme.local", "Escrito-manualmente-2026"); return null; });
+        } finally {
+            memory.releaseRead.countDown();
+        }
+        await(() -> fx(() -> !view.lookup("#remember").isDisabled()));
+        fx(() -> {
+            assertEquals("escrito@acme.local", ((TextField) view.lookup("#email")).getText());
+            assertEquals("Escrito-manualmente-2026", ((PasswordField) view.lookup("#password")).getText());
+            assertFalse(((CheckBox) view.lookup("#remember")).isSelected());
+            return null;
+        });
     }
 
     private static Button button(Parent root, String text) {
