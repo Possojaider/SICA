@@ -67,8 +67,10 @@ class AuthorizationTest {
                 () -> sica.saveUser(session, null, new UserForm("a@b.co", "Nombre", "password12345", true, "GUARDA", null)),
                 () -> sica.request(session, 1, 1, AccessPolicy.PREVIA, sica.currentTime(), sica.currentTime().plusHours(1)),
                 () -> sica.request(session, 1, 1, AccessPolicy.NO_ANUNCIADA, sica.currentTime(), sica.currentTime().plusHours(1)),
-                () -> sica.decide(session, 1, true), () -> sica.decide(session, 1, false),
+                () -> sica.decide(session, 1, true, "Identidad y motivo de visita verificados"), () -> sica.decide(session, 1, false, "Identidad y motivo de visita verificados"),
                 () -> sica.checkIn(session, 1), () -> sica.checkOut(session, 1),
+                () -> sica.issueCredential(session, 1),
+                () -> sica.checkInWithCredential(session, CredentialCodes.generate()),
                 () -> sica.incident(session, 1, "Descripción"), () -> sica.archive(session, Entity.PERSONAS, 1),
                 () -> sica.report(session, Report.AUDITORIA, "", null, null),
                 () -> sica.report(session, Report.DENTRO, "", null, null));

@@ -118,23 +118,23 @@ class MySqlIntegrationTest {
         long visit = request(f, AccessPolicy.NO_ANUNCIADA);
         assertThrows(SicaException.class, () -> sica.checkIn(admin, visit));
         Session official = official(f.company());
-        sica.decide(official, visit, true);
+        sica.decide(official, visit, true, "Identidad y motivo de visita verificados");
         sica.checkIn(admin, visit);
         assertEquals("DENTRO", scalar("SELECT estado FROM visitas WHERE id=?", visit));
         assertEquals(Long.toString(official.userId()), scalar("SELECT decidido_por FROM visitas WHERE id=?", visit));
-        assertThrows(SicaException.class, () -> sica.decide(official, visit, true));
+        assertThrows(SicaException.class, () -> sica.decide(official, visit, true, "Identidad y motivo de visita verificados"));
     }
 
     @Test void rejectedAndExpiredRequestsCannotEnterOrBeReapproved() {
         Fixture f = fixture("INVITADO");
         long rejected = request(f, AccessPolicy.NO_ANUNCIADA);
-        sica.decide(admin, rejected, false);
+        sica.decide(admin, rejected, false, "Identidad y motivo de visita verificados");
         assertThrows(SicaException.class, () -> sica.checkIn(admin, rejected));
-        assertThrows(SicaException.class, () -> sica.decide(admin, rejected, true));
+        assertThrows(SicaException.class, () -> sica.decide(admin, rejected, true, "Identidad y motivo de visita verificados"));
         long pending = request(f, AccessPolicy.NO_ANUNCIADA);
         Sica nextDay = new Sica(store, new BcryptHasher(), Clock.offset(clock, Duration.ofDays(1)));
         Session nextSession = nextDay.login("admin@acme.co", "Admin-test-12345");
-        assertThrows(SicaException.class, () -> nextDay.decide(nextSession, pending, true));
+        assertThrows(SicaException.class, () -> nextDay.decide(nextSession, pending, true, "Identidad y motivo de visita verificados"));
         long approved = request(f, AccessPolicy.PREVIA);
         assertThrows(SicaException.class, () -> nextDay.checkIn(nextSession, approved));
     }
@@ -143,7 +143,7 @@ class MySqlIntegrationTest {
         Fixture f = fixture("TRABAJADOR");
         long visit = request(f, AccessPolicy.SIN_CARNET);
         assertThrows(SicaException.class, () -> sica.checkIn(admin, visit));
-        sica.decide(official(f.company()), visit, true);
+        sica.decide(official(f.company()), visit, true, "Identidad y motivo de visita verificados");
         sica.checkIn(admin, visit);
         assertThrows(SicaException.class, () -> sica.request(admin, f.person(), f.company(), AccessPolicy.SIN_CARNET, now, now.plusDays(1)));
     }
@@ -215,7 +215,7 @@ class MySqlIntegrationTest {
         Session official = official(own.company());
         long ownVisit = request(own, AccessPolicy.NO_ANUNCIADA);
         long otherVisit = request(other, AccessPolicy.NO_ANUNCIADA);
-        assertThrows(SicaException.class, () -> sica.decide(official, otherVisit, true));
+        assertThrows(SicaException.class, () -> sica.decide(official, otherVisit, true, "Identidad y motivo de visita verificados"));
         assertThrows(SicaException.class, () -> sica.request(official, other.person(), other.company(), AccessPolicy.PREVIA, now, now.plusHours(1)));
         assertThrows(SicaException.class, () -> sica.savePerson(official, null,
                 new PersonForm("CROSS", "Invitado", "INVITADO", other.company(), "", "HABILITADO")));
@@ -263,7 +263,7 @@ class MySqlIntegrationTest {
     @Test void reportsApplySearchDateAndDecisionFiltersWithoutSqlInjection() {
         Fixture f = fixture("INVITADO");
         long visit = request(f, AccessPolicy.NO_ANUNCIADA);
-        sica.decide(admin, visit, false);
+        sica.decide(admin, visit, false, "Identidad y motivo de visita verificados");
         Data decisions = sica.report(admin, Report.DECISIONES, Long.toString(visit), now.toLocalDate().atStartOfDay(), now.plusDays(1));
         assertTrue(decisions.rows().stream().anyMatch(row -> row.getFirst().equals(Long.toString(visit)) && row.get(6).equals("RECHAZADA")));
         assertTrue(sica.report(admin, Report.VISITAS, "' OR 1=1 --", null, null).rows().isEmpty());
@@ -282,4 +282,200 @@ class MySqlIntegrationTest {
         assertThrows(SicaException.class, () -> request(f, AccessPolicy.PREVIA));
         assertThrows(SicaException.class, () -> sica.archive(admin, Entity.USUARIOS, admin.userId()));
     }
+    @Test void decisionsRequireAndPreserveTheirReasonInVisitsReportsAndAudit() throws Exception {
+        Fixture f = fixture("INVITADO");
+        long visit = request(f, AccessPolicy.NO_ANUNCIADA);
+        assertThrows(SicaException.class, () -> sica.decide(admin, visit, true, " "));
+        assertEquals("PENDIENTE", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        String reason = "Ingreso a reunión con el área de logística. Documento verificado.";
+        sica.decide(admin, visit, true, reason);
+        assertEquals(reason, scalar("SELECT motivo_decision FROM visitas WHERE id=?", visit));
+        assertEquals(reason, scalar("SELECT detalles FROM bitacora_auditoria WHERE accion='APROBAR' AND entidad=? AND tabla_afectada='visitas'", visit));
+        Data decisions = sica.report(admin, Report.DECISIONES, Long.toString(visit), null, null);
+        int reasonColumn = decisions.columns().indexOf("Motivo");
+        assertTrue(decisions.rows().stream().anyMatch(row ->
+                row.getFirst().equals(Long.toString(visit)) && row.get(reasonColumn).equals(reason)));
+    }
+
+    @Test void notificationsPersistAcrossInstancesAndArePrivateAndIdempotentlyRead() throws Exception {
+        Fixture own = fixture("INVITADO");
+        Fixture other = fixture("INVITADO");
+        Session official = official(own.company());
+        Session another = official(other.company());
+        long visit = request(own, AccessPolicy.NO_ANUNCIADA);
+        assertEquals(1, sica.unreadNotifications(official));
+        assertEquals(0, sica.unreadNotifications(another));
+        Sica second = new Sica(new JdbcStore(url, user, password), new BcryptHasher(), clock);
+        Session secondOfficial = second.login(scalar("SELECT correo FROM usuarios WHERE id=?", official.userId()), "Funcionario-12345");
+        Data inbox = second.report(secondOfficial, Report.NOTIFICACIONES, "", null, null);
+        assertEquals(1, inbox.rows().size());
+        long notification = Long.parseLong(inbox.rows().getFirst().getFirst());
+        assertEquals(Long.toString(visit), inbox.rows().getFirst().get(1));
+        assertThrows(SicaException.class, () -> sica.markNotificationRead(another, notification));
+        second.markNotificationRead(secondOfficial, notification);
+        sica.markNotificationRead(official, notification);
+        assertEquals(0, sica.unreadNotifications(official));
+        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE accion='LEER_NOTIFICACION' AND entidad=?", notification));
+        second.decide(secondOfficial, visit, false, "El anfitrión no tiene disponibilidad.");
+        Data requesterInbox = sica.report(admin, Report.NOTIFICACIONES, "rechazada", null, null);
+        assertTrue(requesterInbox.rows().stream().anyMatch(row -> row.get(1).equals(Long.toString(visit))));
+        assertEquals("RECHAZADA", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        second.logout(secondOfficial);
+    }
+
+    @Test void notificationFailureRollsBackRequestAndAudit() throws Exception {
+        Fixture f = fixture("INVITADO");
+        sql("CREATE TRIGGER notification_test_fail BEFORE INSERT ON notificaciones FOR EACH ROW " +
+                "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Fallo de notificacion de prueba'");
+        try {
+            assertThrows(SicaException.class, () -> request(f, AccessPolicy.NO_ANUNCIADA));
+        } finally {
+            sql("DROP TRIGGER notification_test_fail");
+        }
+        assertEquals("0", scalar("SELECT COUNT(*) FROM visitas WHERE persona=?", f.person()));
+    }
+
+    @Test void qrIsPrivateSingleUseAndCanBeConsumedByAnotherInstance() throws Exception {
+        Fixture f = fixture("INVITADO");
+        long visit = request(f, AccessPolicy.PREVIA);
+        Credential credential = sica.issueCredential(admin, visit);
+        assertEquals(CredentialCodes.digest(credential.code()), scalar("SELECT qr_hash FROM visitas WHERE id=?", visit));
+        assertFalse(sica.report(admin, Report.VISITAS, "", null, null).columns().contains("qr_hash"));
+        Sica second = new Sica(new JdbcStore(url, user, password), new BcryptHasher(), clock);
+        Session secondAdmin = second.login("admin@acme.co", "Admin-test-12345");
+        second.checkInWithCredential(secondAdmin, credential.code());
+        assertEquals("DENTRO", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+        assertNull(scalar("SELECT qr_hash FROM visitas WHERE id=?", visit));
+        assertThrows(SicaException.class, () -> sica.checkInWithCredential(admin, credential.code()));
+        assertEquals("0", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE detalles LIKE ?", "%" + credential.code() + "%"));
+        second.logout(secondAdmin);
+    }
+
+    @Test void qrRotationExpirationScopeAndRestrictionsAreEnforced() throws Exception {
+        Fixture f = fixture("INVITADO");
+        long visit = request(f, AccessPolicy.PREVIA);
+        Credential first = sica.issueCredential(admin, visit);
+        Credential second = sica.issueCredential(admin, visit);
+        assertThrows(SicaException.class, () -> sica.checkInWithCredential(admin, first.code()));
+        Fixture other = fixture("INVITADO");
+        assertThrows(SicaException.class, () -> sica.issueCredential(official(other.company()), visit));
+        Sica nextDay = new Sica(store, new BcryptHasher(), Clock.offset(clock, Duration.ofDays(1)));
+        Session nextAdmin = nextDay.login("admin@acme.co", "Admin-test-12345");
+        assertThrows(SicaException.class, () -> nextDay.checkInWithCredential(nextAdmin, second.code()));
+        assertThrows(SicaException.class, () -> nextDay.issueCredential(nextAdmin, visit));
+        sica.archive(admin, Entity.PERSONAS, f.person());
+        assertThrows(SicaException.class, () -> sica.checkInWithCredential(admin, second.code()));
+        long pending = request(other, AccessPolicy.NO_ANUNCIADA);
+        assertThrows(SicaException.class, () -> sica.issueCredential(admin, pending));
+        nextDay.logout(nextAdmin);
+    }
+
+    @Test void concurrentQrScansPermitExactlyOneEntry() throws Exception {
+        Fixture f = fixture("INVITADO");
+        long visit = request(f, AccessPolicy.PREVIA);
+        Credential credential = sica.issueCredential(admin, visit);
+        CyclicBarrier barrier = new CyclicBarrier(2);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Callable<Boolean> scan = () -> {
+            barrier.await(10, TimeUnit.SECONDS);
+            try {
+                sica.checkInWithCredential(admin, credential.code());
+                return true;
+            } catch (SicaException denied) {
+                return false;
+            }
+        };
+        try {
+            Future<Boolean> first = executor.submit(scan);
+            Future<Boolean> second = executor.submit(scan);
+            assertNotEquals(first.get(20, TimeUnit.SECONDS), second.get(20, TimeUnit.SECONDS));
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE accion='CHECK_IN' AND entidad=?", visit));
+    }
+
+    @Test void migrationPreservesLegacyVisitsAndCanBeRetriedWithoutRestoringRevokedPermissions() throws Exception {
+        // Se crea una base propia para verificar una actualización desde la primera versión.
+        String legacyDatabase = "sica_it_" + UUID.randomUUID().toString().replace("-", "");
+        String legacyUrl = url.replace(database, legacyDatabase);
+        try {
+            try (var connection = DriverManager.getConnection(rootUrl, user, password);
+                 var statement = connection.createStatement()) {
+                for (String resource : List.of("/db/schema.sql", "/db/data.sql")) {
+                    try (var input = getClass().getResourceAsStream(resource)) {
+                        String script = new String(Objects.requireNonNull(input).readAllBytes(), StandardCharsets.UTF_8)
+                                .replace("sica", legacyDatabase);
+                        for (String query : script.split(";")) if (!query.isBlank()) statement.execute(query);
+                    }
+                }
+                statement.execute("INSERT INTO empresas (id,nit,nombre) VALUES (1,'LEGADO','Empresa conservada')");
+                statement.execute("INSERT INTO usuarios (id,correo,nombre,hash,rol) VALUES (1,'legacy@acme.co','Usuario histórico','hash-importado','SUPER')");
+                statement.execute("INSERT INTO personas (id,documento,nombre,tipo,empresa,estado) VALUES (1,'LEGADO','Persona conservada','INVITADO',1,'HABILITADO')");
+                statement.execute("""
+                        INSERT INTO visitas (id,persona,empresa,tipo,estado,inicio,vence,solicitado_por,decidido_por,decidido_en)
+                        VALUES (1,1,1,'PREVIA','APROBADA','2026-11-18 10:00','2026-11-18 15:00',1,1,'2026-11-18 09:00')
+                        """);
+                statement.execute("""
+                        INSERT INTO visitas (id,persona,empresa,tipo,estado,inicio,vence,solicitado_por)
+                        VALUES (2,1,1,'NO_ANUNCIADA','PENDIENTE',CURRENT_TIMESTAMP,DATE_ADD(CURRENT_TIMESTAMP,INTERVAL 1 HOUR),1)
+                        """);
+                statement.execute("DROP TABLE notificaciones");
+                statement.execute("ALTER TABLE visitas DROP COLUMN motivo_decision,DROP COLUMN qr_hash");
+                statement.execute("DELETE FROM rol_permisos WHERE permiso='QR_EMITIR'");
+                statement.execute("DELETE FROM permisos WHERE id='QR_EMITIR'");
+            }
+            Configuration configuration = new Configuration(legacyUrl, user, password, clock);
+            DatabaseMigrator.upgrade(configuration);
+            DatabaseMigrator.upgrade(configuration);
+            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
+                 var statement = connection.createStatement();
+                 var rs = statement.executeQuery("SELECT v.estado,v.motivo_decision,p.nombre FROM visitas v JOIN personas p ON p.id=v.persona WHERE v.id=1")) {
+                assertTrue(rs.next());
+                assertEquals("APROBADA", rs.getString(1));
+                assertEquals("Decisión anterior a la incorporación de motivos", rs.getString(2));
+                assertEquals("Persona conservada", rs.getString(3));
+            }
+            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
+                 var statement = connection.createStatement();
+                 var rs = statement.executeQuery("SELECT COUNT(*) FROM notificaciones WHERE usuario=1 AND visita=2 AND evento='SOLICITUD'")) {
+                assertTrue(rs.next());
+                assertEquals(1, rs.getInt(1));
+            }
+            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
+                 var statement = connection.createStatement()) {
+                statement.execute("DELETE FROM rol_permisos WHERE rol='FUNCIONARIO' AND permiso='QR_EMITIR'");
+            }
+            DatabaseMigrator.upgrade(configuration);
+            try (var connection = DriverManager.getConnection(legacyUrl, user, password);
+                 var statement = connection.createStatement();
+                 var rs = statement.executeQuery("SELECT COUNT(*) FROM rol_permisos WHERE rol='FUNCIONARIO' AND permiso='QR_EMITIR'")) {
+                assertTrue(rs.next());
+                assertEquals(0, rs.getInt(1));
+            }
+        } finally {
+            try (var connection = DriverManager.getConnection(rootUrl, user, password);
+                 var statement = connection.createStatement()) {
+                statement.execute("DROP DATABASE IF EXISTS " + legacyDatabase);
+            }
+        }
+    }
+
+    @Test void decisionNotificationsKeepCompanyScopeWithCustomAccessPermissions() throws Exception {
+        Fixture own = fixture("INVITADO");
+        Fixture other = fixture("INVITADO");
+        Session ownOfficial = official(own.company());
+        Session otherOfficial = official(other.company());
+        sql("INSERT INTO rol_permisos VALUES ('FUNCIONARIO','ACCESO')");
+        try {
+            long visit = request(own, AccessPolicy.NO_ANUNCIADA);
+            sica.decide(ownOfficial, visit, true, "Identidad verificada para esta empresa.");
+            assertTrue(sica.report(ownOfficial, Report.NOTIFICACIONES, "aprobada", null, null).rows().stream()
+                    .anyMatch(row -> row.get(1).equals(Long.toString(visit))));
+            assertTrue(sica.report(otherOfficial, Report.NOTIFICACIONES, "", null, null).rows().isEmpty());
+        } finally {
+            sql("DELETE FROM rol_permisos WHERE rol='FUNCIONARIO' AND permiso='ACCESO'");
+        }
+    }
+
 }

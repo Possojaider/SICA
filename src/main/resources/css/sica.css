@@ -33,3 +33,7 @@
 .dialog-pane { -fx-background-color: #f5f8fb; }
 .dialog-pane .header-panel { -fx-background-color: #e9eff4; }
 .tooltip { -fx-font-size: 12px; }
+
+.navigation-scroll, .navigation-scroll > .viewport {
+  -fx-background-color: #122c41; -fx-background-insets: 0; -fx-padding: 0;
+}

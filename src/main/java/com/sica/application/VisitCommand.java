@@ -12,7 +12,7 @@ public sealed interface VisitCommand {
     record CheckOut(long visit) implements VisitCommand {
         @Override public void execute(SicaUseCases sica, Session session) { sica.checkOut(session, visit); }
     }
-    record Decide(long visit, boolean approve) implements VisitCommand {
-        @Override public void execute(SicaUseCases sica, Session session) { sica.decide(session, visit, approve); }
+    record Decide(long visit, boolean approve, String reason) implements VisitCommand {
+        @Override public void execute(SicaUseCases sica, Session session) { sica.decide(session, visit, approve, reason); }
     }
 }

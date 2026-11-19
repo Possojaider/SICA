@@ -8,6 +8,7 @@ import com.sica.application.*;
 import com.sica.domain.SicaException;
 import com.sica.domain.port.out.Store.*;
 import com.sica.infrastructure.CsvExporter;
+import com.sica.infrastructure.QrCodec;
 import javafx.fxml.FXML;
 import javafx.scene.control.*;
 import javafx.scene.image.*;
@@ -21,7 +22,8 @@ import java.util.function.Consumer;
 
 public final class ShellController implements AutoCloseable {
     private record Page(String name, Report report) {}
-    private record Snapshot(Data data, Statistics stats, Set<String> permissions, List<Option> companies) {}
+    private record Snapshot(Data data, Statistics stats, Set<String> permissions, List<Option> companies, long unread) {}
+    private record QrView(Credential credential, byte[] image) {}
     private final SicaUseCases sica;
     private final Session session;
     private final BackgroundTasks tasks;
@@ -38,7 +40,8 @@ public final class ShellController implements AutoCloseable {
     private final DashboardViewModel dashboard = new DashboardViewModel();
     @FXML private VBox navigation;
     @FXML private Label heading, notice, rowCount, status, reportLabel, stateLabel;
-    @FXML private HBox statistics, actions, reportSelector;
+    @FXML private HBox statistics, reportSelector;
+    @FXML private FlowPane actions;
     @FXML private TextField search;
     @FXML private DatePicker from, until;
     @FXML private ComboBox<String> reportType, stateFilter;
@@ -78,6 +81,7 @@ public final class ShellController implements AutoCloseable {
     private void navigation() {
         navigation.getChildren().clear();
         menu("Panel principal", Report.VISITAS);
+        menu("Notificaciones", Report.NOTIFICACIONES);
         if (permissions.contains("USUARIOS")) menu("Usuarios", Report.USUARIOS);
         if (permissions.contains("EMPRESAS")) menu("Empresas", Report.EMPRESAS);
         if (permissions.contains("PERSONAS_LEER")) menu("Personas", Report.PERSONAS);
@@ -109,9 +113,14 @@ public final class ShellController implements AutoCloseable {
             if (busy) return;
             generation++;
             page = new Page(title, report);
+            navigation.getChildren().forEach(node -> node.getStyleClass().remove("selected"));
+            button.getStyleClass().add("selected");
             search.clear();
             from.setValue(null);
             until.setValue(null);
+            stateFilter.getItems().setAll(report == Report.NOTIFICACIONES
+                    ? List.of("Todos", "SIN_LEER", "LEIDA")
+                    : List.of("Todos", "PENDIENTE", "APROBADA", "RECHAZADA", "DENTRO", "CERRADA", "SALIDA_OLVIDADA"));
             stateFilter.setValue(title.contains("solicitudes") || title.contains("pendientes") ? "PENDIENTE" : "Todos");
             heading.setText(title);
             status.setText("");
@@ -131,7 +140,7 @@ public final class ShellController implements AutoCloseable {
         reportLabel.setManaged(reports);
         reportLabel.setVisible(reports);
         boolean visit = EnumSet.of(Report.VISITAS, Report.SOLICITUDES, Report.DENTRO, Report.HISTORIAL, Report.DECISIONES).contains(currentReport());
-        boolean stateVisible = visit && !dashboard;
+        boolean stateVisible = (visit || page.report() == Report.NOTIFICACIONES) && !dashboard;
         stateFilter.setManaged(stateVisible);
         stateFilter.setVisible(stateVisible);
         stateLabel.setManaged(stateVisible);
@@ -148,6 +157,13 @@ public final class ShellController implements AutoCloseable {
                 }
                 if (page.name().equals("Personas")) action("Ver fotografía", this::photo, false);
             }
+            case "Notificaciones" -> {
+                action("Marcar como leída", () -> {
+                    long id = selectedId();
+                    run(() -> { sica.markNotificationRead(session, id); return null; }, result -> saved());
+                }, true);
+                action("Consultar visita", this::notificationVisit, false);
+            }
             case "Registro de visitas" -> {
                 if (permissions.contains("PRE_REGISTRAR") || permissions.contains("SOLICITAR")) action("Registrar visita", this::request, true);
                 action("Ver fotografía", this::photo, false);
@@ -155,19 +171,67 @@ public final class ShellController implements AutoCloseable {
             case "Entradas y salidas" -> {
                 action("Registrar entrada", () -> visitCommand("Confirmar entrada", new VisitCommand.CheckIn(selectedId())), true);
                 action("Registrar salida", () -> visitCommand("Confirmar salida", new VisitCommand.CheckOut(selectedId())), false);
+                action("Ingresar con QR", () -> visitEditor().scan(), false);
+                action("Ingresar con imagen QR", this::scanImage, false);
                 if (permissions.contains("SOLICITAR")) action("Solicitar ingreso", this::request, false);
                 action("Ver fotografía", this::photo, false);
                 if (permissions.contains("INCIDENTES")) action("Reportar incidente", () -> visitEditor().incident(Long.toString(selectedId())), false);
             }
             case "Aprobar solicitudes" -> {
-                action("Aprobar", () -> visitCommand("Aprobar solicitud", new VisitCommand.Decide(selectedId(), true)), true);
-                action("Rechazar", () -> visitCommand("Rechazar solicitud", new VisitCommand.Decide(selectedId(), false)), false);
+                action("Aprobar", () -> visitEditor().decide(selectedId(), true), true);
+                action("Rechazar", () -> visitEditor().decide(selectedId(), false), false);
                 action("Ver fotografía", this::photo, false);
             }
             case "Incidentes" -> action("Reportar incidente", () -> visitEditor().incident(""), true);
             case "Reportes" -> action("Exportar CSV", this::export, true);
             default -> { }
         }
+        if (!dashboard && EnumSet.of(Report.VISITAS, Report.SOLICITUDES).contains(page.report()) && permissions.contains("QR_EMITIR")) {
+            action("Emitir o renovar QR", this::issueQr, false);
+        }
+    }
+
+    private void issueQr() {
+        long id = selectedId();
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION,
+                "Se emitirá un QR de un solo ingreso para la visita " + id + ". Si existe otro QR, quedará invalidado.",
+                ButtonType.OK, ButtonType.CANCEL);
+        confirmation.initOwner(table.getScene().getWindow());
+        confirmation.setHeaderText("Emitir credencial temporal");
+        confirmation.showAndWait().filter(ButtonType.OK::equals).ifPresent(ignored ->
+                run(() -> {
+                    Credential credential = sica.issueCredential(session, id);
+                    return new QrView(credential, QrCodec.encode(credential.code()));
+                }, view -> CredentialDialog.show(table.getScene().getWindow(), view.credential(), view.image(), tasks)));
+    }
+
+    private void scanImage() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Seleccionar QR para registrar entrada");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Imágenes QR", "*.png", "*.jpg", "*.jpeg"));
+        java.io.File image = chooser.showOpenDialog(table.getScene().getWindow());
+        if (image == null) return;
+        run(() -> {
+            sica.checkInWithCredential(session, QrCodec.read(image.toPath()));
+            return null;
+        }, result -> saved());
+    }
+
+    private void notificationVisit() {
+        long visit = Long.parseLong(presenter.selected().get("Visita"));
+        run(() -> sica.report(session, Report.VISITAS, Long.toString(visit), null, null), data -> {
+            Data selected = new Data(data.columns(), data.rows().stream()
+                    .filter(row -> row.getFirst().equals(Long.toString(visit))).toList());
+            if (selected.rows().isEmpty()) throw new SicaException("La visita ya no está disponible para tu rol o empresa.");
+            TableView<List<String>> details = new TableView<>();
+            new TablePresenter(details).display(selected, "Todos");
+            details.setPrefSize(950, 190);
+            Alert dialog = new Alert(Alert.AlertType.INFORMATION);
+            dialog.initOwner(table.getScene().getWindow());
+            dialog.setHeaderText("Detalle de visita " + visit);
+            dialog.getDialogPane().setContent(details);
+            dialog.show();
+        });
     }
 
     private void action(String title, Runnable action, boolean primary) {
@@ -200,7 +264,7 @@ public final class ShellController implements AutoCloseable {
         LocalDateTime end = until.getValue() == null ? null : until.getValue().plusDays(1).atStartOfDay();
         long requestGeneration = generation;
         run(() -> new Snapshot(sica.report(session, report, query, begin, end), sica.statistics(session),
-                        sica.permissions(session), sica.companies(session)), snapshot -> {
+                        sica.permissions(session), sica.companies(session), sica.unreadNotifications(session)), snapshot -> {
             if (requestGeneration != generation) return;
             boolean permissionsChanged = !permissions.equals(snapshot.permissions());
             permissions = snapshot.permissions();
@@ -209,7 +273,8 @@ public final class ShellController implements AutoCloseable {
             updateLayout();
             render(snapshot.data());
             dashboard.update(snapshot.stats());
-            notice.setText(snapshot.stats().pending() + " solicitudes pendientes vigentes · Actualizado " +
+            notice.setText(snapshot.unread() + " notificaciones sin leer · " + snapshot.stats().pending() +
+                    " solicitudes pendientes · Actualizado " +
                     sica.currentTime().toLocalTime().withNano(0));
             if (!automatic) status.setText("Datos actualizados");
         });
