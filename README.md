@@ -319,6 +319,8 @@ SICA_UI_TEST=true ./scripts/test-mysql -B -ntp
 
 Para otro servidor se pueden definir `SICA_TEST_DB_URL`, `SICA_TEST_DB_USER` y `SICA_TEST_DB_PASSWORD` y ejecutar Maven directamente. La URL de pruebas debe apuntar al servidor sin seleccionar una base.
 
+La suite comprueba también la reinstalación de privilegios y el flujo completo con una cuenta JDBC restringida, equivalente a la de la aplicación desplegada. Las interfaces de prueba también operan con estos permisos restringidos.
+
 La suite cubre notificaciones privadas y persistentes, motivos de decisión, migración desde datos antiguos, reemisión y consumo concurrente de QR, lectura de imágenes, autenticación, sesiones revocadas y falsificadas, usuarios inactivos, RBAC, límites horarios, los cuatro escenarios de acceso, decisiones, ámbito por empresa, duplicados, restricciones, incidentes, reportes, inyección SQL, BCrypt, CSV, concurrencia y rollback por fallos de auditoría. Los fallos SQL provocados por las pruebas de duplicados y auditoría producen entradas ERROR esperadas en el log.
 
 ## Desarrollo por fases y Git
@@ -340,6 +342,6 @@ Para conectar el repositorio local a un repositorio de GitHub elegido por el pro
 
 ### Resultado de verificación en este equipo
 
-El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 41 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
+El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 42 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
 
-El paquete de escritorio se inició con el runtime incluido. La herramienta de inspección nativa agotó el tiempo de espera también con otras aplicaciones del equipo, por lo que la revisión de las vistas se hizo mediante las pruebas de carga, navegación y renderizado JavaFX. Los controles JavaFX de solicitud, lectura de avisos, aprobación con motivo, emisión de QR e ingreso se probaron de extremo a extremo. Los selectores nativos de archivos CSV y PNG quedan pendientes de comprobación manual.
+La aplicación instalada se comprobó mediante inspección nativa. Se reprodujo y corrigió un permiso faltante sobre notificaciones causado por la interrupción del script al repetir la instalación de privilegios. El script ahora admite esa repetición y las consultas del panel y la bandeja quedaron verificadas con la cuenta real de aplicación. Los controles JavaFX de solicitud, lectura de avisos, aprobación con motivo, emisión de QR e ingreso se probaron de extremo a extremo. Los selectores nativos de archivos CSV y PNG quedan pendientes de comprobación manual.

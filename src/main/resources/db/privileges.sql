@@ -1,4 +1,4 @@
-REVOKE ALL PRIVILEGES ON sica.* FROM 'sica'@'%';
+REVOKE IF EXISTS ALL PRIVILEGES ON sica.* FROM 'sica'@'%';
 GRANT SELECT ON sica.roles TO 'sica'@'%';
 GRANT SELECT ON sica.permisos TO 'sica'@'%';
 GRANT SELECT ON sica.rol_permisos TO 'sica'@'%';

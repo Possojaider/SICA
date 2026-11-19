@@ -478,4 +478,69 @@ class MySqlIntegrationTest {
         }
     }
 
+    @Test void restrictedApplicationAccountSupportsRepeatedPrivilegeInstallationAndCompleteAccessFlow() throws Exception {
+        String appUser = "sica_rt_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        String appPassword = CredentialCodes.generate();
+        try {
+            try (var connection = DriverManager.getConnection(rootUrl, user, password)) {
+                try (var create = connection.prepareStatement("CREATE USER '" + appUser + "'@'%' IDENTIFIED BY ?")) {
+                    create.setString(1, appPassword);
+                    create.executeUpdate();
+                }
+                try (var statement = connection.createStatement()) {
+                    // Reproduce la cuenta recién creada por Docker, seguida de una actualización.
+                    statement.execute("GRANT ALL PRIVILEGES ON " + database + ".* TO '" + appUser + "'@'%'");
+                    try (var input = getClass().getResourceAsStream("/db/privileges.sql")) {
+                        String grants = new String(Objects.requireNonNull(input).readAllBytes(), StandardCharsets.UTF_8)
+                                .replace("ON sica.", "ON " + database + ".")
+                                .replace("'sica'@'%'", "'" + appUser + "'@'%'");
+                        for (int iteration = 0; iteration < 2; iteration++) {
+                            for (String query : grants.split(";")) if (!query.isBlank()) statement.execute(query);
+                        }
+                    }
+                }
+            }
+            Sica deployed = new Sica(new JdbcStore(url, appUser, appPassword), new BcryptHasher(), clock);
+            Session deployedAdmin = deployed.login("admin@acme.co", "Admin-test-12345");
+            try (var connection = DriverManager.getConnection(rootUrl, user, password);
+                 var statement = connection.createStatement()) {
+                statement.execute("REVOKE SELECT,INSERT,UPDATE ON " + database + ".notificaciones FROM '" + appUser + "'@'%'");
+                SicaException missingPermission = assertThrows(SicaException.class,
+                        () -> deployed.unreadNotifications(deployedAdmin));
+                assertTrue(missingPermission.getMessage().contains("permisos de MySQL"));
+                statement.execute("GRANT SELECT,INSERT,UPDATE ON " + database + ".notificaciones TO '" + appUser + "'@'%'");
+            }
+            assertDoesNotThrow(() -> deployed.statistics(deployedAdmin));
+            assertDoesNotThrow(() -> deployed.companies(deployedAdmin));
+            assertDoesNotThrow(() -> deployed.unreadNotifications(deployedAdmin));
+            assertDoesNotThrow(() -> deployed.report(deployedAdmin, Report.NOTIFICACIONES, "", null, null));
+            String suffix = UUID.randomUUID().toString().substring(0, 8);
+            long company = deployed.saveCompany(deployedAdmin, null, new Company("LIMIT-" + suffix, "Empresa de permisos", true));
+            long person = deployed.savePerson(deployedAdmin, null,
+                    new PersonForm("LIMIT-" + suffix, "Invitado de permisos", "INVITADO", company, "", "HABILITADO"));
+            long visit = deployed.request(deployedAdmin, person, company, AccessPolicy.NO_ANUNCIADA, now, now.plusHours(1));
+            Data notifications = deployed.report(deployedAdmin, Report.NOTIFICACIONES, "", null, null);
+            long notification = notifications.rows().stream().filter(row -> row.get(1).equals(Long.toString(visit)))
+                    .map(row -> Long.parseLong(row.getFirst())).findFirst().orElseThrow();
+            deployed.markNotificationRead(deployedAdmin, notification);
+            deployed.decide(deployedAdmin, visit, true, "Verificación usando la cuenta JDBC restringida.");
+            Credential credential = deployed.issueCredential(deployedAdmin, visit);
+            deployed.checkInWithCredential(deployedAdmin, credential.code());
+            deployed.checkOut(deployedAdmin, visit);
+            assertEquals("CERRADA", scalar("SELECT estado FROM visitas WHERE id=?", visit));
+            try (var connection = DriverManager.getConnection(url, appUser, appPassword);
+                 var statement = connection.createStatement()) {
+                SQLException denied = assertThrows(SQLException.class,
+                        () -> statement.executeUpdate("UPDATE bitacora_auditoria SET detalles='alteración' LIMIT 1"));
+                assertEquals(1142, denied.getErrorCode());
+            }
+            deployed.logout(deployedAdmin);
+        } finally {
+            try (var connection = DriverManager.getConnection(rootUrl, user, password);
+                 var statement = connection.createStatement()) {
+                statement.execute("DROP USER IF EXISTS '" + appUser + "'@'%'");
+            }
+        }
+    }
+
 }
