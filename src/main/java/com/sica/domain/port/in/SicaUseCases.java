@@ -17,6 +17,7 @@ public interface SicaUseCases {
     long saveUser(Session session, Long id, UserForm form);
     void archive(Session session, Entity entity, long id);
     long request(Session session, long person, long company, AccessPolicy type, LocalDateTime start, LocalDateTime end);
+    long request(Session session, long person, long company, AccessPolicy type, LocalDateTime start, LocalDateTime end, String plate);
     void decide(Session session, long id, boolean approve, String reason);
     long unreadNotifications(Session session);
     void markNotificationRead(Session session, long id);

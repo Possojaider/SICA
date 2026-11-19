@@ -98,7 +98,7 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
 
     public long saveCompany(Session session, Long id, Company form) {
         return protectedOperation(session, "EMPRESAS", (tx, actor) -> {
-            long saved = tx.company(id, new Company(required(form.taxId(), 32), required(form.name(), 150), form.active()));
+            long saved = tx.company(id, new Company(optional(form.taxId(), 32), required(form.name(), 100), form.active(), optional(form.contact(), 100)));
             change(tx, actor, id, "empresas", saved, "Activo: " + form.active());
             return saved;
         });
@@ -122,7 +122,7 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
                 throw new SicaException("Selecciona una empresa activa.");
             }
             Person before = id == null ? null : tx.lockPerson(id);
-            long saved = tx.person(id, new PersonForm(required(form.document(), 40), required(form.name(), 150),
+            long saved = tx.person(id, new PersonForm(required(form.document(), 20), required(form.name(), 100),
                     form.type(), form.company(), photo(form.photo()), form.state()));
             change(tx, actor, id, "personas", saved, "Estado: " + form.state());
             if (before != null && !before.state().equals(form.state())) {
@@ -145,7 +145,7 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
                 throw new SicaException("Tu usuario debe conservar su rol y permanecer activo.");
             }
             String hash = id != null && (form.hash() == null || form.hash().isEmpty()) ? null : password(form.hash());
-            long saved = tx.user(id, new UserForm(email(form.email()), required(form.name(), 150), hash,
+            long saved = tx.user(id, new UserForm(email(form.email()), required(form.name(), 100), hash,
                     form.active(), form.role(), form.company()));
             change(tx, actor, id, "usuarios", saved, "Rol: " + form.role() + ", activo: " + form.active());
             return saved;
@@ -163,6 +163,11 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
 
     public long request(Session session, long person, long company, AccessPolicy type,
                         LocalDateTime start, LocalDateTime end) {
+        return request(session, person, company, type, start, end, null);
+    }
+
+    public long request(Session session, long person, long company, AccessPolicy type,
+                        LocalDateTime start, LocalDateTime end, String plate) {
         return protectedOperation(session, type == AccessPolicy.PREVIA ? "PRE_REGISTRAR" : "SOLICITAR", (tx, actor) -> {
             if (type == null || start == null || end == null) throw new SicaException("Selecciona el escenario y el horario de visita.");
             scope(actor, company);
@@ -171,7 +176,7 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
             LocalDateTime now = LocalDateTime.now(clock);
             type.validate(subject.type(), subject.company(), company, start, end, now);
             String state = type == AccessPolicy.PREVIA ? "APROBADA" : "PENDIENTE";
-            long id = tx.createVisit(person, company, type, state, start, end, actor.id(), now);
+            long id = tx.createVisit(person, company, type, state, start, end, actor.id(), now, optional(plate, 10));
             tx.audit(actor.id(), "CREAR", "visitas", id, type + " / " + state);
             if (type == AccessPolicy.PREVIA) {
                 tx.audit(actor.id(), "APROBAR", "visitas", id, "Registro anticipado autorizado");
@@ -308,6 +313,9 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
         return store.transaction(tx -> {
             Account actor = tx.account(session.userId());
             if (actor == null || !actor.active()) throw new SicaException("La sesión ya no está autorizada.");
+            if ("FUNCIONARIO".equals(actor.role()) && actor.company() == null) {
+                throw new SicaException("Asigna una empresa al funcionario antes de operar.");
+            }
             if (permission != null && !actor.permissions().contains(permission)) {
                 throw new SicaException("Tu rol no tiene permiso para esta operación.");
             }
@@ -347,14 +355,14 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
     }
 
     private static String email(String value) {
-        String normalized = required(value, 254).toLowerCase(Locale.ROOT);
+        String normalized = required(value, 100).toLowerCase(Locale.ROOT);
         if (!normalized.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")) throw new SicaException("Introduce un correo válido.");
         return normalized;
     }
 
     private static String photo(String value) {
         if (value == null || value.isBlank()) return null;
-        String url = required(value, 2048);
+        String url = required(value, 255);
         try {
             URI uri = URI.create(url);
             if (uri.getHost() != null && uri.getUserInfo() == null && "https".equalsIgnoreCase(uri.getScheme())) return url;
@@ -362,6 +370,10 @@ public final class Sica implements com.sica.domain.port.in.SicaUseCases {
             throw new SicaException("Introduce una URL HTTPS válida para la foto.");
         }
         throw new SicaException("Introduce una URL HTTPS válida para la foto.");
+    }
+
+    private static String optional(String value, int limit) {
+        return value == null || value.isBlank() ? null : required(value, limit);
     }
 
     private static String required(String value, int limit) {

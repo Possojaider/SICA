@@ -2,7 +2,7 @@
 
 Aplicación de escritorio para Zona Acme. Gestiona usuarios, empresas, trabajadores, invitados, autorizaciones, entradas, salidas, incidentes y auditoría mediante datos persistidos en MySQL.
 
-El proyecto se creó desde cero a partir de la especificación textual suministrada. El esquema SQL concreta las tablas y relaciones de esa especificación. Las bajas de usuarios, empresas y personas son lógicas para conservar los registros históricos.
+La base utiliza el esquema académico entregado, con claves numéricas, nombres de columnas originales y ampliaciones para autorizaciones temporales, notificaciones y QR. Las bajas de usuarios, empresas y personas son lógicas para conservar los registros históricos.
 
 ## Tecnologías
 
@@ -20,20 +20,20 @@ Se necesitan JDK 21 y Docker Desktop activo para la instalación incluida. Maven
 
 2. Editar los valores de `SICA_DB_PASSWORD` y `MYSQL_ROOT_PASSWORD` de `.env`. Las líneas usan el formato literal `CLAVE=valor`, sin comillas. El archivo está excluido de Git.
 
-3. Iniciar MySQL e instalar el esquema y los catálogos.
+3. Iniciar MySQL e instalar el esquema, los catálogos y los ejemplos académicos.
 
    ```sh
    docker compose up -d --wait
    ```
 
-4. Añadir a `.env` las credenciales del superusuario que se desea crear.
+4. Para crear además un superusuario propio, añadir sus credenciales a `.env`.
 
    ```dotenv
    SICA_ADMIN_EMAIL=admin@acme.local
    SICA_ADMIN_PASSWORD=asigna-una-contraseña-propia
    ```
 
-5. Crear el superusuario y abrir la aplicación.
+5. Crear el superusuario propio y abrir la aplicación.
 
    ```sh
    ./scripts/sica --create-admin
@@ -46,7 +46,7 @@ En este espacio de trabajo ya se generó `.env`, se inició MySQL y se creó el 
 
 ### Instalación en MySQL existente
 
-Ejecutar `src/main/resources/db/schema.sql` y después `data.sql` en una base vacía con una cuenta administradora. Ambos archivos usan la base `sica`. El instalador de consola también permite crearla.
+Ejecutar `src/main/resources/db/schema.sql` y después `data.sql` en una base vacía con una cuenta administradora. Los archivos usan la base `sica_acme`. `demo.sql` contiene los INSERT de empresas, usuarios, personas, visitas, incidentes y notificaciones. El instalador de consola también permite crearla.
 
 ```sh
 SICA_DB_USER=root SICA_DB_PASSWORD='clave-administrativa' ./mvnw javafx:run -Djavafx.args=--init-db
@@ -171,23 +171,61 @@ El código contiene una credencial aleatoria de 256 bits. MySQL conserva su dige
 
 El lector de imágenes admite archivos de hasta 10 MB y 16 millones de píxeles. El flujo admite lectores que escriben como teclado y archivos de imagen.
 
-### Actualizar una instalación existente
+### Instalar los INSERT de ejemplo
 
-Las instalaciones nuevas reciben los campos y la tabla adicionales desde schema.sql. Una instalación existente se actualiza con una cuenta administrativa mediante este comando.
+Los archivos se ejecutan en este orden con una cuenta administradora.
+
+1. `db/schema.sql` crea las tablas y las relaciones.
+2. `db/data.sql` inserta cuatro roles, catorce permisos y los estados.
+3. `db/demo.sql` inserta dos empresas, cuatro usuarios, seis personas, cinco visitas, un incidente y tres notificaciones.
+4. `db/privileges.sql` concede los permisos JDBC a la cuenta de aplicación.
+
+Los datos de ejemplo se identifican mediante correos `@acme.example`, documentos `ACME-…` y NIT `DEMO-…`. Las fotografías son opcionales y se cargan desde Personas.
+
+| Cuenta de ejemplo | Rol |
+| --- | --- |
+| `super@acme.example` | Superusuario |
+| `supervisor@acme.example` | Supervisor de Seguridad |
+| `guarda@acme.example` | Guarda de Seguridad |
+| `funcionario@acme.example` | Funcionario de Empresa de Acme Logística |
+
+La contraseña de estas cuatro cuentas académicas es `Acme-Sica-2026!`. Los INSERT contienen su hash BCrypt. La carga repetida conserva las filas existentes y las visitas de ejemplo.
+
+También se pueden cargar los ejemplos por consola sobre una instalación preparada.
+
+```sh
+./scripts/sica --seed-demo
+```
+
+### Adaptar la base académica original
+
+Si ya se crearon las once tablas originales, configurar `SICA_DB_URL` para esa base y ejecutar con una cuenta administradora.
 
 ```sh
 SICA_DB_USER=root SICA_DB_PASSWORD='clave-administrativa' ./scripts/sica --migrate-db
 ```
 
-Después, aplicar src/main/resources/db/privileges.sql para conceder acceso a la tabla de notificaciones. En el Compose incluido se puede ejecutar desde la raíz del proyecto.
+El migrador añade las columnas complementarias y las tablas faltantes, conserva las claves numéricas existentes y completa los catálogos. Las autorizaciones antiguas sin horario se identifican como expiradas y quedan registradas en auditoría. Los funcionarios necesitan una empresa asignada para operar. MySQL confirma DDL de forma implícita y las comprobaciones de metadatos permiten retomar una actualización interrumpida.
+
+Después se aplican los privilegios de la cuenta de aplicación. Si la base tiene otro nombre, ajustar `sica_acme` en `privileges.sql`.
 
 ```sh
 docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot' < src/main/resources/db/privileges.sql
 ```
 
-El migrador conserva las visitas y decisiones existentes, identifica los motivos históricos ausentes y crea avisos para las solicitudes pendientes vigentes. Un bloqueo de MySQL serializa las migraciones concurrentes y las comprobaciones de metadatos permiten repetir una actualización interrumpida. Las asignaciones de permiso personalizadas se conservan al repetir el comando. La creación de objetos usa DDL de MySQL, con confirmación implícita. Las actualizaciones de datos y sus registros de auditoría comparten transacción.
+### Importar la versión anterior de este proyecto
 
-La base local de este espacio de trabajo ya fue migrada y tiene los privilegios actualizados.
+La versión previa utilizaba claves de texto y columnas como correo, hash y estado. La importación hacia la nueva base usa este orden.
+
+```sh
+SICA_DB_USER=root SICA_DB_PASSWORD='clave-administrativa' ./scripts/sica --init-db
+SICA_DB_USER=root SICA_DB_PASSWORD='clave-administrativa' ./scripts/sica --import-legacy
+SICA_DB_USER=root SICA_DB_PASSWORD='clave-administrativa' ./scripts/sica --seed-demo
+```
+
+`SICA_LEGACY_DATABASE` selecciona el origen y su valor inicial es `sica`. El destino predeterminado es `sica_acme`. La importación conserva identificadores operacionales, hashes, roles y permisos asignados, decisiones, QR, notificaciones y auditoría. Los catálogos se relacionan mediante sus códigos. Las comprobaciones de tamaños evitan truncar datos que excedan los límites del esquema entregado. Las escrituras y el marcador de importación comparten transacción, y repetir el comando conserva la importación ya terminada.
+
+La instalación local ya usa `sica_acme`, contiene los ejemplos y los registros anteriores importados. La base `sica` contiene el origen de esa importación.
 
 ## Arquitectura hexagonal y MVC
 
@@ -225,7 +263,9 @@ src/main/java/com/sica/
     Sica, VisitCommand
   infrastructure/
     JdbcStore, ReportQuery, BcryptHasher, Configuration,
-    ApplicationFactory, DatabaseInstaller, DatabaseMigrator, QrCodec, CsvExporter, LocalEnvironment
+    ApplicationFactory, DatabaseInstaller, DatabaseMigrator,
+    LegacyDatabaseImporter, DemoDataInstaller, SchemaScripts,
+    QrCodec, CsvExporter, LocalEnvironment
   presentation/
     DesktopApplication, LoginController, ShellController,
     EntityEditor, VisitEditor, CredentialDialog, FormDialog, TablePresenter,
@@ -234,7 +274,7 @@ src/main/java/com/sica/
 src/main/resources/
   fxml/       login.fxml, shell.fxml, credential.fxml
   css/        sica.css
-  db/         schema.sql, data.sql, privileges.sql
+  db/         schema.sql, data.sql, demo.sql, privileges.sql
   logback.xml
 src/test/java/com/sica/
 ```
@@ -285,10 +325,10 @@ erDiagram
 
 El esquema incorpora los campos mínimos para materializar los flujos descritos.
 
-- `usuarios.empresa` limita el alcance del funcionario.
-- `personas.tipo`, `foto` y `estado` distinguen invitados, trabajadores y restricciones.
-- `visitas.tipo`, `inicio`, `vence` y los campos de decisión mantienen la autorización temporal y su responsable.
-- `visitas.persona_dentro` es una columna generada con índice único. Garantiza una sola visita abierta por persona.
+- `usuarios.empresa_id` limita el alcance del funcionario y `rol_id` referencia el catálogo numérico de roles.
+- `personas.tipo_persona`, `url_foto` y `estado_acceso_id` corresponden a las columnas del esquema entregado.
+- `visitas.tipo_solicitud`, `inicio_programado`, `fin_programado` y los campos de decisión mantienen la autorización temporal. `fecha_entrada`, `fecha_salida`, `vehiculo_placa` y `visita_aprobada_por` conservan los nombres originales.
+- `visitas.persona_dentro` es una columna generada a partir de las fechas reales de entrada y salida, con índice único. Garantiza una sola visita abierta por persona.
 - Las claves foráneas conservan la integridad entre personas, empresas, usuarios, visitas y catálogos.
 - Los estados de salida normal y salida olvidada conservan el historial.
 - Los triggers de auditoría rechazan UPDATE y DELETE.
@@ -321,7 +361,7 @@ Para otro servidor se pueden definir `SICA_TEST_DB_URL`, `SICA_TEST_DB_USER` y `
 
 La suite comprueba también la reinstalación de privilegios y el flujo completo con una cuenta JDBC restringida, equivalente a la de la aplicación desplegada. Las interfaces de prueba también operan con estos permisos restringidos.
 
-La suite cubre notificaciones privadas y persistentes, motivos de decisión, migración desde datos antiguos, reemisión y consumo concurrente de QR, lectura de imágenes, autenticación, sesiones revocadas y falsificadas, usuarios inactivos, RBAC, límites horarios, los cuatro escenarios de acceso, decisiones, ámbito por empresa, duplicados, restricciones, incidentes, reportes, inyección SQL, BCrypt, CSV, concurrencia y rollback por fallos de auditoría. Los fallos SQL provocados por las pruebas de duplicados y auditoría producen entradas ERROR esperadas en el log.
+La suite cubre la adaptación del esquema académico, los INSERT repetibles, los accesos de los cuatro usuarios de ejemplo, la importación del esquema anterior, contacto principal y placa del vehículo, notificaciones privadas y persistentes, motivos de decisión, migración desde datos antiguos, reemisión y consumo concurrente de QR, lectura de imágenes, autenticación, sesiones revocadas y falsificadas, usuarios inactivos, RBAC, límites horarios, los cuatro escenarios de acceso, decisiones, ámbito por empresa, duplicados, restricciones, incidentes, reportes, inyección SQL, BCrypt, CSV, concurrencia y rollback por fallos de auditoría. Los fallos SQL provocados por las pruebas de duplicados y auditoría producen entradas ERROR esperadas en el log.
 
 ## Desarrollo por fases y Git
 
@@ -342,6 +382,6 @@ Para conectar el repositorio local a un repositorio de GitHub elegido por el pro
 
 ### Resultado de verificación en este equipo
 
-El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 42 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
+El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 45 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
 
 La aplicación instalada se comprobó mediante inspección nativa. Se reprodujo y corrigió un permiso faltante sobre notificaciones causado por la interrupción del script al repetir la instalación de privilegios. El script ahora admite esa repetición y las consultas del panel y la bandeja quedaron verificadas con la cuenta real de aplicación. Los controles JavaFX de solicitud, lectura de avisos, aprobación con motivo, emisión de QR e ingreso se probaron de extremo a extremo. Los selectores nativos de archivos CSV y PNG quedan pendientes de comprobación manual.

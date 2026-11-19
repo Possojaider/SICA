@@ -4,7 +4,7 @@ services:
     container_name: sica-mysql
     command: ["--default-time-zone=-05:00"]
     environment:
-      MYSQL_DATABASE: sica
+      MYSQL_DATABASE: sica_acme
       MYSQL_USER: sica
       MYSQL_PASSWORD: ${SICA_DB_PASSWORD:?Define SICA_DB_PASSWORD en .env}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Define MYSQL_ROOT_PASSWORD en .env}
@@ -14,7 +14,8 @@ services:
       - sica-data:/var/lib/mysql
       - ./src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./src/main/resources/db/data.sql:/docker-entrypoint-initdb.d/02-data.sql:ro
-      - ./src/main/resources/db/privileges.sql:/docker-entrypoint-initdb.d/03-privileges.sql:ro
+      - ./src/main/resources/db/demo.sql:/docker-entrypoint-initdb.d/03-demo.sql:ro
+      - ./src/main/resources/db/privileges.sql:/docker-entrypoint-initdb.d/04-privileges.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost --silent"]
       interval: 5s

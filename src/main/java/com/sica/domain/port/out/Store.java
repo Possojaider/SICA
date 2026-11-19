@@ -11,7 +11,9 @@ public interface Store {
     record Person(String type, Long company, String state) {}
     record Visit(long id, long person, long company, String state, LocalDateTime start, LocalDateTime expires,
                  LocalDateTime entry) {}
-    record Company(String taxId, String name, boolean active) {}
+    record Company(String taxId, String name, boolean active, String contact) {
+        public Company(String taxId, String name, boolean active) { this(taxId, name, active, null); }
+    }
     record PersonForm(String document, String name, String type, Long company, String photo, String state) {}
     record UserForm(String email, String name, String hash, boolean active, String role, Long company) {}
     enum Entity { EMPRESAS, PERSONAS, USUARIOS }
@@ -35,7 +37,7 @@ public interface Store {
         Visit visit(long id, boolean lock);
         Visit inside(long person);
         long createVisit(long person, long company, AccessPolicy type, String state, LocalDateTime start,
-                         LocalDateTime end, long actor, LocalDateTime now);
+                         LocalDateTime end, long actor, LocalDateTime now, String plate);
         void decide(long visit, String state, long actor, LocalDateTime now, String reason);
         void notifyRequest(long visit, long company, LocalDateTime now);
         void notifyDecision(long visit, String state, LocalDateTime now);
