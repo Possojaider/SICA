@@ -101,7 +101,7 @@ class AuthorizationTest {
     }
 
     @Test void passwordLengthAndEmailAreValidatedBeforeUserPersistence() {
-        actor = new Account(1, actor.hash(), true, "SUPER", null, Set.of("USUARIOS"));
+        actor = new Account(1, actor.hash(), true, "SUPER", null, Set.of("USUARIOS_CREAR"));
         assertThrows(SicaException.class, () -> sica.saveUser(session, null,
                 new UserForm("bad-email", "Usuario", "long-password123", true, "GUARDA", null)));
         assertThrows(SicaException.class, () -> sica.saveUser(session, null,

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.geometry.Insets?>
+<DialogPane xmlns:fx="http://javafx.com/fxml/1" id="sica-form" prefWidth="650">
+  <buttonTypes><ButtonType text="Guardar" buttonData="OK_DONE"/><ButtonType fx:constant="CANCEL"/></buttonTypes>
+  <content>
+    <GridPane hgap="16" vgap="12">
+      <padding><Insets top="18" right="18" bottom="18" left="18"/></padding>
+      <columnConstraints><ColumnConstraints minWidth="170" prefWidth="190"/><ColumnConstraints minWidth="310" hgrow="ALWAYS"/></columnConstraints>
+      <children>
+        <Label fx:id="reasonLabel" text="Motivo obligatorio" wrapText="true" GridPane.columnIndex="0" GridPane.rowIndex="0"/>
+        <TextArea fx:id="reason" maxWidth="Infinity" wrapText="true" prefRowCount="5" GridPane.columnIndex="1" GridPane.rowIndex="0"/>
+        <Label fx:id="formError" id="form-error" wrapText="true" styleClass="error" GridPane.columnIndex="0" GridPane.columnSpan="2" GridPane.rowIndex="1"/>
+      </children>
+    </GridPane>
+  </content>
+</DialogPane>

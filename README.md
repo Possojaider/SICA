@@ -268,28 +268,30 @@ src/main/java/com/sica/
   domain/
     AccessPolicy, CredentialCodes, Session, SicaException
     port/in/SicaUseCases
-    port/out/Store, PasswordHasher, SavedLoginStore
+    port/out/Store, AuthenticationRepository, DirectoryRepository, VisitRepository,
+             NotificationRepository, ReportingRepository, AuditRepository, PasswordHasher, SavedLoginStore
   application/
-    Sica, VisitCommand
+    Sica, DirectoryService, VisitService, InputValidation, VisitCommand
   infrastructure/
-    JdbcStore, ReportQuery, BcryptHasher, Configuration,
+    JdbcStore, JdbcUnit, JdbcSql, JdbcDirectory, JdbcVisits, JdbcNotifications,
+    JdbcReports, JdbcAudit, ReportQuery, BcryptHasher, Configuration,
     ApplicationFactory, DatabaseInstaller, DatabaseMigrator,
     LegacyDatabaseImporter, DemoDataInstaller, SchemaScripts,
     QrCodec, CsvExporter, LocalEnvironment, MacKeychainLoginStore
   presentation/
     DesktopApplication, LoginController, ShellController,
     EntityEditor, VisitEditor, CredentialDialog, FormDialog, TablePresenter,
-    DashboardViewModel, BackgroundTasks
+    DashboardViewModel, BackgroundTasks, CredentialTasks, ShellNavigation, PhotoDialog, TutorialController
   Main
 src/main/resources/
-  fxml/       login.fxml, shell.fxml, credential.fxml
+  fxml/       login.fxml, shell.fxml, credential.fxml, tutorial.fxml, forms/*.fxml
   css/        sica.css
-  db/         schema.sql, data.sql, demo.sql, privileges.sql
+  db/         schema.sql, data.sql, demo.sql, privileges.sql, action-permissions.sql
   logback.xml
 src/test/java/com/sica/
 ```
 
-Las pantallas de gestión usan una vista de tabla compartida con columnas y acciones configuradas por módulo. Los formularios se construyen mediante `FormDialog`. El flujo cubre login, panel principal, usuarios, empresas, personas, visitas, acceso, pendientes, aprobación, incidentes, auditoría y reportes.
+Las pantallas de gestión usan una vista de tabla compartida con columnas y acciones configuradas por módulo. Los formularios están definidos en `fxml/forms` y `FormDialog` enlaza sus controles con las operaciones de aplicación. El flujo cubre login, panel principal, usuarios, empresas, personas, visitas, acceso, pendientes, aprobación, incidentes, auditoría y reportes.
 
 ### Principios SOLID
 
@@ -298,7 +300,7 @@ Las pantallas de gestión usan una vista de tabla compartida con columnas y acci
 | Responsabilidad única | Las políticas, SQL, hash, CSV, formularios y navegación tienen clases propias |
 | Abierto/cerrado | Se pueden añadir adaptadores implementando los puertos de persistencia y hash |
 | Sustitución de Liskov | El servicio usa los contratos de los puertos y las pruebas sustituyen el almacenamiento |
-| Segregación de interfaces | El cifrado de contraseñas se limita a `PasswordHasher`; `Store.Unit` expone las operaciones que comparten transacción |
+| Segregación de interfaces | Los repositorios se dividen en seis puertos por capacidad. `Store.Unit` los agrupa únicamente para compartir la transacción; los servicios reciben los puertos específicos |
 | Inversión de dependencias | Los casos de uso reciben interfaces y el reloj mediante constructor |
 
 ### Patrones implementados
@@ -396,10 +398,61 @@ El repositorio utiliza ramas `main` y `develop`, ramas de funcionalidad y Conven
 | 7 · Interfaz e informes | FXML, CSS, controladores y CSV. Compilación y ejecución del escritorio |
 | 8 · Verificación | JUnit 5, integración MySQL y esta guía. Corrección de errores y empaquetado |
 
-Para conectar el repositorio local a un repositorio de GitHub elegido por el propietario, configurar su URL como remoto `origin` y publicar las ramas de trabajo. La configuración local de credenciales queda excluida del historial.
+El remoto `origin` apunta a [Possojaider/SICA](https://github.com/Possojaider/SICA). Se utilizan ramas `main`, `develop` y ramas de trabajo, con Conventional Commits. La configuración local de credenciales queda excluida del historial. GitHub Actions ejecuta compilación y pruebas con Java 21 y MySQL 8.4 en cada push y pull request; las pruebas gráficas y del llavero se ejecutan en macOS con las opciones indicadas en esta guía.
 
 ### Resultado de verificación en este equipo
 
-El 18 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4 y renderizado JavaFX. Pasaron 50 pruebas, con cero fallos, cero errores y cero omisiones. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
+El 19 de noviembre de 2026 se ejecutó la suite completa con MySQL 8.4, renderizado JavaFX y acceso nativo al llavero de macOS. Pasaron 58 pruebas, con cero fallos, cero errores y cero omisiones, incluyendo la reproducción del videotutorial integrado. Las imágenes generadas se revisaron para comprobar el diseño del login, el panel, los reportes, la credencial QR y la entrada registrada.
 
-La aplicación instalada se comprobó mediante inspección nativa. Se reprodujo y corrigió un permiso faltante sobre notificaciones causado por la interrupción del script al repetir la instalación de privilegios. El script ahora admite esa repetición y las consultas del panel y la bandeja quedaron verificadas con la cuenta real de aplicación. Los controles JavaFX de solicitud, lectura de avisos, aprobación con motivo, emisión de QR e ingreso se probaron de extremo a extremo. Los selectores nativos de archivos CSV y PNG quedan pendientes de comprobación manual.
+La aplicación instalada se comprobó mediante inspección nativa. Se reprodujo y corrigió un permiso faltante sobre notificaciones causado por la interrupción del script al repetir la instalación de privilegios. El script ahora admite esa repetición y las consultas del panel y la bandeja quedaron verificadas con la cuenta real de aplicación. Los controles JavaFX de solicitud, lectura de avisos, aprobación con motivo, emisión de QR e ingreso se probaron de extremo a extremo. Los selectores nativos de CSV y PNG se comprobaron en la aplicación empaquetada, incluyendo el ingreso con el PNG exportado. También se verificó una imagen HTTPS real y se corrigió el recorte del diálogo al finalizar la carga. La aceptación nativa usó una base temporal que se eliminó al terminar. El informe completo está en [docs/VERIFICACION_FLUJOS.md](docs/VERIFICACION_FLUJOS.md).
+
+
+En la revisión del 19 de noviembre se añadieron pruebas de creación, edición y baja desde formularios; cambio de reporte durante una consulta; revocación de permisos en la pantalla actual; aislamiento por empresa con permisos ampliados; y tamaño del diálogo de fotografía. Una prueba adicional ejecuta dos JVM independientes para intercambiar notificaciones, aprobar una solicitud, registrar ingreso, reportar un incidente y registrar salida. La interfaz vuelve a Notificaciones si pierde autorización sobre su pantalla actual y conserva los cambios de reporte pendientes durante una consulta.
+
+## Videotutorial dentro de la aplicación
+
+En el menú lateral, el botón **ⓘ Videotutorial** abre una ventana de información disponible para los cuatro roles. Permite reproducir y pausar, mover la posición, volver al inicio, ajustar volumen y velocidad, usar pantalla completa y elegir cualquiera de los 25 capítulos. Al cerrar el tutorial o la sesión se libera el reproductor y se detiene el audio.
+
+El video, su portada y el índice se incluyen en los recursos de la aplicación. Funciona sin internet y sin depender de la carpeta de entregables. Cuando se ejecuta desde el JAR se prepara una copia temporal del video en segundo plano para permitir los saltos de reproducción; se elimina al terminar el proceso. El reproductor utiliza [JavaFX Media](https://openjfx.io/javadoc/21/javafx.media/javafx/scene/media/MediaPlayer.html).
+
+## Videotutorial
+
+El videotutorial narrado en español se encuentra en [entregables/tutorial/SICA-videotutorial.mp4](entregables/tutorial/SICA-videotutorial.mp4). Incluye subtítulos, capítulos, transcripción y capturas reales con datos de prueba. El guion y las instrucciones para generarlo están en [docs/tutorial/README.md](docs/tutorial/README.md).
+
+## Cierre funcional y académico · 23 de noviembre de 2026
+
+### Autorizaciones vencidas
+
+La consulta del panel y los listados regulariza las autorizaciones `PENDIENTE` o `APROBADA` cuyo final ya pasó, siempre que no tengan una entrada registrada. Cambian a `EXPIRADA`, se elimina su huella QR y se inserta `EXPIRAR` en auditoría dentro de la misma transacción. Se conserva la visita, su motivo, las fechas y el responsable de la decisión. Las visitas `DENTRO` nunca se cierran por vencimiento de autorización.
+
+El sondeo de la interfaz aplica esta regularización aproximadamente cada cinco segundos más la consulta. Si todas las aplicaciones están cerradas, se aplica en la siguiente consulta al abrirlas. El ingreso continúa comprobando el vencimiento aunque todavía no se haya ejecutado la regularización. El funcionario solo regulariza datos de su empresa. Las instancias concurrentes no duplican la auditoría de expiración.
+
+### Permisos por acción
+
+| Módulo | Consultar | Crear | Editar | Dar de baja |
+| --- | --- | --- | --- | --- |
+| Usuarios | `USUARIOS_LEER` | `USUARIOS_CREAR` | `USUARIOS_EDITAR` | `USUARIOS_BAJA` |
+| Empresas | `EMPRESAS_LEER` | `EMPRESAS_CREAR` | `EMPRESAS_EDITAR` | `EMPRESAS_BAJA` |
+| Personas | `PERSONAS_LEER` | `PERSONAS_CREAR` | `PERSONAS_EDITAR` | `PERSONAS_BAJA` |
+
+Crear trabajadores requiere además `TRABAJADORES_CREAR`. Los guardas y funcionarios conservan la creación de invitados. Cada acción se valida en la aplicación y sus botones se muestran según el permiso correspondiente. La migración convierte las asignaciones de gestión anteriores en asignaciones independientes y retira las asignaciones amplias, conservando sus catálogos para compatibilidad histórica. Repetir la migración no restaura permisos revocados después.
+
+En una base existente, ejecutar una vez con las credenciales administrativas en variables de entorno:
+
+```sh
+./scripts/sica --migrate-db
+```
+
+La cuenta administrativa debe poder modificar catálogos, asignaciones e índices. Se conserva la información operativa. En una instalación vacía, `data.sql` incluye los permisos nuevos desde el inicio. No se debe volver a ejecutar el sembrado completo de `data.sql` sobre una instalación personalizada para actualizarla: usar el migrador.
+
+### Edición y credenciales locales
+
+Los formularios conservan la empresa inactiva actualmente asociada al editar una persona o usuario. Se permiten correcciones sin trasladar el registro, pero se rechazan nuevas asignaciones a empresas inactivas. La edición de una persona de baja conserva ese estado; desactivarla exige el permiso de baja. La empresa inactiva sigue impidiendo nuevos ingresos.
+
+Las lecturas, escrituras y eliminaciones del llavero usan un trabajador separado con una espera máxima de tres segundos para la interfaz. Un acceso manual no espera una lectura pendiente; una escritura demorada produce un aviso sin bloquear la sesión. Las respuestas tardías no sobrescriben datos escritos manualmente ni abren una segunda sesión.
+
+### Compilación en el editor
+
+Maven es la compilación de referencia. Si VS Code/JDT comparte `target/classes` y genera clases incompletas durante una edición, desactivar `java.autobuild.enabled` en la configuración del espacio de trabajo y compilar mediante Maven. El repositorio incluye ese ajuste en `.vscode/settings.json` para evitar la interferencia; no cambia las preferencias globales del editor.
+
+La verificación final de este cierre pasó **68 pruebas**, con cero fallos, errores y omisiones. El registro local está en `target/verification-final.log`. La migración se aplicó a la base local conservando el historial; las asignaciones previas se guardaron en un archivo dentro de `target`, excluido de Git.

@@ -83,3 +83,12 @@
 .button.login-submit:disabled { -fx-opacity: 0.72; }
 .login-submit .progress-indicator { -fx-progress-color: white; }
 .login-message { -fx-font-size: 11px; }
+
+/* Ayuda y videotutorial */
+.info-symbol { -fx-font-family: "Arial"; -fx-font-weight: bold; -fx-font-size: 15px; -fx-alignment: CENTER; -fx-min-width: 23px; -fx-min-height: 23px; -fx-max-width: 23px; -fx-max-height: 23px; -fx-border-color: #8ed8cb; -fx-border-width: 1.5px; -fx-border-radius: 20px; -fx-text-fill: #8ed8cb; }
+.tutorial-info { -fx-border-color: #177e78; -fx-text-fill: #177e78; }
+.tutorial-root { -fx-background-color: #f3f7fa; }
+.tutorial-screen { -fx-background-color: #0d2534; }
+.tutorial-chapter-title { -fx-font-size: 19px; -fx-font-weight: bold; -fx-text-fill: #18394a; }
+.tutorial-root .list-cell { -fx-padding: 12px 10px; -fx-font-size: 12px; }
+.tutorial-root .list-cell:selected { -fx-background-color: #d8eeeb; -fx-text-fill: #123d3a; }

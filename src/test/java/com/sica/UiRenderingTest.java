@@ -90,6 +90,7 @@ class UiRenderingTest {
         sica = ApplicationFactory.create(configuration);
         sica.bootstrap(adminEmail, adminPassword);
         session = sica.login(adminEmail, adminPassword);
+        if ("true".equals(System.getenv("SICA_TUTORIAL_CAPTURE"))) DemoDataInstaller.install(configuration);
     }
 
     @AfterAll void closeJavaFx() throws Exception {
@@ -120,6 +121,10 @@ class UiRenderingTest {
             return null;
         });
         snapshot(login, "login");
+        if ("true".equals(System.getenv("SICA_TUTORIAL_CAPTURE"))) {
+            Parent cleanLogin = fx(() -> load("/fxml/login.fxml", new LoginController(sica, tasks, authenticated::set)));
+            snapshot(cleanLogin, "tutorial-login");
+        }
         fx(() -> {
             ((TextField) login.lookup("#email")).setText(adminEmail);
             ((PasswordField) login.lookup("#password")).setText(adminPassword);
@@ -152,10 +157,58 @@ class UiRenderingTest {
                 assertFalse(((TableView<?>) workspace.lookup("#table")).getColumns().isEmpty());
                 return null;
             });
+            if ("true".equals(System.getenv("SICA_TUTORIAL_CAPTURE"))) {
+                snapshot(workspace, "modulo-" + name.toLowerCase(Locale.ROOT).replace(' ', '-'));
+                captureTutorialForm(workspace, name);
+            }
         }
         snapshot(workspace, "reportes");
     }
 
+
+    private void captureTutorialForm(Parent view, String name) throws Exception {
+        String action = switch (name) {
+            case "Usuarios", "Empresas", "Personas" -> "Nuevo";
+            case "Registro de visitas" -> "Registrar visita";
+            case "Incidentes" -> "Reportar incidente";
+            case "Aprobar solicitudes" -> "Aprobar";
+            default -> null;
+        };
+        if (action == null) return;
+        fx(() -> {
+            if (name.equals("Aprobar solicitudes")) table(view).getSelectionModel().selectFirst();
+            button(view, action).fire();
+            return null;
+        });
+        await(() -> fx(() -> form() != null));
+        fx(() -> {
+            switch (name) {
+                case "Empresas" -> { text(form(), "nit", "900123456-1"); text(form(), "name", "Empresa del tutorial"); text(form(), "contact", "Área de recepción"); }
+                case "Usuarios" -> { text(form(), "email", "funcionario@empresa.example"); text(form(), "name", "Funcionario de ejemplo"); selectChoice(form(), "#role", "FUNCIONARIO"); tutorialChoice("company", "Acme Logística"); }
+                case "Personas" -> { text(form(), "doc", "DEMO-1001"); text(form(), "name", "Visitante de ejemplo"); tutorialChoice("company", "Acme Logística"); }
+                case "Registro de visitas" -> tutorialChoice("person", "ACME-I-001");
+                case "Incidentes" -> { text(form(), "visit", "2"); text(form(), "description", "Documento deteriorado. Identidad verificada por recepción."); }
+                case "Aprobar solicitudes" -> text(form(), "reason", "Reunión confirmada con el anfitrión. Documento verificado.");
+                default -> { }
+            }
+            return null;
+        });
+        snapshot(fx(UiRenderingTest::form), "formulario-" + name.toLowerCase(Locale.ROOT).replace(' ', '-'));
+        if (name.equals("Registro de visitas")) {
+            fx(() -> { selectChoice(form(), "#type", "NO_ANUNCIADA"); return null; });
+            snapshot(fx(UiRenderingTest::form), "formulario-no-anunciada");
+            fx(() -> { selectChoice(form(), "#type", "SIN_CARNET"); tutorialChoice("person", "ACME-T-001"); return null; });
+            snapshot(fx(UiRenderingTest::form), "formulario-sin-carnet");
+        }
+        fx(() -> { button(form(), "Cancelar").fire(); return null; });
+        await(() -> fx(() -> form() == null));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void tutorialChoice(String id, String contains) {
+        ComboBox<String> combo = (ComboBox<String>) form().lookup("#" + id);
+        combo.setValue(combo.getItems().stream().filter(value -> value.contains(contains)).findFirst().orElseThrow());
+    }
 
     @Test void allFourRolesSeeTheirAuthorizedNavigation() throws Exception {
         long company = sica.saveCompany(session, null, new Company("UI-ROLES", "Empresa de prueba de roles", true));
@@ -173,11 +226,13 @@ class UiRenderingTest {
             Set<String> names = fx(() -> view.lookup("#navigation").lookupAll(".button").stream()
                     .map(Button.class::cast).map(Button::getText).collect(java.util.stream.Collectors.toSet()));
             assertTrue(names.containsAll(List.of("Panel principal", "Notificaciones", "Personas", "Registro de visitas")));
+            assertNotNull(fx(() -> view.lookup("#helpButton")), "Todos los roles deben tener acceso al tutorial");
             assertEquals(role.equals("SUPER"), names.contains("Usuarios"));
             assertEquals(role.equals("SUPER"), names.contains("Empresas"));
             assertEquals(!role.equals("FUNCIONARIO"), names.contains("Entradas y salidas"));
             assertEquals(Set.of("SUPER", "FUNCIONARIO").contains(role), names.contains("Aprobar solicitudes"));
             assertEquals(!role.equals("GUARDA"), names.contains("Reportes"));
+            if ("true".equals(System.getenv("SICA_TUTORIAL_CAPTURE"))) snapshot(view, "rol-" + role.toLowerCase(Locale.ROOT));
             fx(() -> { controller.close(); return null; });
             sica.logout(roleSession);
         }
@@ -293,6 +348,362 @@ class UiRenderingTest {
         anotherApplication.logout(official);
     }
 
+
+    @Test void permissionChangesRefreshNavigationEvenWhenTheCurrentPageIsRevoked() throws Exception {
+        String email = "revocacion@ui.sica.local";
+        sica.saveUser(session, null, new UserForm(email, "Supervisor", "Ui-Supervisor-seguro-2026", true, "SUPERVISOR", null));
+        Session supervisor = sica.login(email, "Ui-Supervisor-seguro-2026");
+        BackgroundTasks worker = new BackgroundTasks();
+        workers.add(worker);
+        ShellController controller = new ShellController(sica, supervisor, worker, () -> {});
+        Parent view = fx(() -> { controllers.add(controller); return load("/fxml/shell.fxml", controller); });
+        try {
+            navigate(view, "Incidentes");
+            changeSupervisorPermission("INCIDENTES", false);
+            fx(() -> { button(view, "Actualizar").fire(); return null; });
+            awaitIdle(view);
+            assertFalse(fx(() -> view.lookup("#status").getStyleClass().contains("error")),
+                    fx(() -> ((Label) view.lookup("#status")).getText()));
+            assertFalse(fx(() -> view.lookup("#navigation").lookupAll(".button").stream()
+                    .map(Button.class::cast).anyMatch(b -> b.getText().equals("Incidentes"))));
+            changeSupervisorPermission("VISITAS_LEER", false);
+            fx(() -> { button(view, "Actualizar").fire(); return null; });
+            awaitIdle(view);
+            assertFalse(fx(() -> view.lookup("#status").getStyleClass().contains("error")));
+            assertEquals("Notificaciones", fx(() -> ((Label) view.lookup("#heading")).getText()));
+            assertFalse(fx(() -> view.lookup("#navigation").lookupAll(".button").stream()
+                    .map(Button.class::cast).anyMatch(b -> b.getText().equals("Panel principal"))));
+        } finally {
+            fx(() -> { controller.close(); return null; });
+            changeSupervisorPermission("INCIDENTES", true);
+            changeSupervisorPermission("VISITAS_LEER", true);
+            sica.logout(supervisor);
+        }
+    }
+
+    @Test void changingReportWhileAQueryIsRunningEventuallyLoadsTheSelectedReport() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean block = new java.util.concurrent.atomic.AtomicBoolean();
+        var delayed = (com.sica.domain.port.in.SicaUseCases) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[] {com.sica.domain.port.in.SicaUseCases.class},
+                (proxy, method, arguments) -> {
+                    if (method.getName().equals("report") && block.compareAndSet(true, false)) {
+                        started.countDown();
+                        if (!release.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Consulta de prueba bloqueada");
+                    }
+                    try { return method.invoke(sica, arguments); }
+                    catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
+                });
+        BackgroundTasks worker = new BackgroundTasks();
+        workers.add(worker);
+        ShellController controller = new ShellController(delayed, session, worker, () -> {});
+        Parent view = fx(() -> { controllers.add(controller); return load("/fxml/shell.fxml", controller); });
+        try {
+            navigate(view, "Reportes");
+            block.set(true);
+            fx(() -> { button(view, "Actualizar").fire(); return null; });
+            assertTrue(started.await(10, TimeUnit.SECONDS));
+            fx(() -> {
+                @SuppressWarnings("unchecked") ComboBox<String> reports = (ComboBox<String>) view.lookup("#reportType");
+                reports.setValue("Incidentes registrados");
+                return null;
+            });
+            release.countDown();
+            awaitIdle(view);
+            assertTrue(fx(() -> table(view).getColumns().stream().anyMatch(column -> column.getText().equals("Descripcion"))));
+            assertEquals("Incidentes registrados", fx(() -> ((ComboBox<?>) view.lookup("#reportType")).getValue()));
+        } finally {
+            release.countDown();
+            fx(() -> { controller.close(); return null; });
+        }
+    }
+
+    @Test void asynchronousPhotoKeepsItsImageAndCloseButtonInsideTheDialog() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        long company = sica.saveCompany(session, null, new Company("PHOTO-" + suffix, "Empresa fotografía", true));
+        String document = "PHOTO-" + suffix;
+        sica.savePerson(session, null, new PersonForm(document, "Fotografía de prueba", "INVITADO", company,
+                "https://sica-photo-test.invalid/image.png", "HABILITADO"));
+        ShellController controller = new ShellController(sica, session, tasks, () -> {});
+        Parent view = fx(() -> { controllers.add(controller); return load("/fxml/shell.fxml", controller); });
+        try {
+            navigate(view, "Personas");
+            selectRowContaining(view, document);
+            fx(() -> { button(view, "Ver fotografía").fire(); return null; });
+            await(() -> fx(() -> dialog("Fotografía de identificación") != null));
+            fx(() -> {
+                DialogPane pane = dialog("Fotografía de identificación");
+                javafx.scene.image.ImageView image = (javafx.scene.image.ImageView) pane.lookup("#identity-photo");
+                assertNotNull(image);
+                assertTrue(image.isPreserveRatio());
+                assertTrue(image.getParent().getLayoutBounds().getHeight() >= 400);
+                var close = pane.lookupButton(ButtonType.OK);
+                var bounds = close.localToScene(close.getBoundsInLocal());
+                assertTrue(bounds.getMaxY() <= pane.getScene().getHeight(), "El botón debe permanecer dentro de la ventana");
+                ((Button) close).fire();
+                return null;
+            });
+        } finally {
+            fx(() -> { controller.close(); return null; });
+        }
+    }
+
+    private void changeSupervisorPermission(String permission, boolean grant) throws SQLException {
+        String sql = grant
+                ? "INSERT IGNORE INTO rol_permisos SELECT r.id,p.id FROM roles r CROSS JOIN permisos p WHERE r.codigo='SUPERVISOR' AND p.codigo=?"
+                : "DELETE FROM rol_permisos WHERE rol_id=(SELECT id FROM roles WHERE codigo='SUPERVISOR') AND permiso_id=(SELECT id FROM permisos WHERE codigo=?)";
+        try (var connection = DriverManager.getConnection(databaseUrl, dbUser, dbPassword);
+             var statement = connection.prepareStatement(sql)) {
+            statement.setString(1, permission);
+            statement.executeUpdate();
+        }
+    }
+
+    @Test void companiesPeopleAndUsersCanBeCreatedEditedAndArchivedThroughForms() throws Exception {
+        ShellController controller = new ShellController(sica, session, tasks, () -> {});
+        Parent view = fx(() -> { controllers.add(controller); return load("/fxml/shell.fxml", controller); });
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        try {
+            navigate(view, "Empresas");
+            fx(() -> { button(view, "Nuevo").fire(); return null; });
+            await(() -> fx(() -> form() != null));
+            fx(() -> {
+                text(form(), "nit", "CRUD-" + suffix);
+                text(form(), "name", "Empresa formularios " + suffix);
+                text(form(), "contact", "Contacto original");
+                button(form(), "Guardar").fire();
+                return null;
+            });
+            await(() -> fx(() -> form() == null));
+            awaitIdle(view);
+            long company = selectRowContaining(view, "CRUD-" + suffix);
+            fx(() -> { button(view, "Editar").fire(); return null; });
+            await(() -> fx(() -> form() != null));
+            fx(() -> { text(form(), "contact", "Contacto actualizado"); button(form(), "Guardar").fire(); return null; });
+            await(() -> fx(() -> form() == null));
+            awaitIdle(view);
+            assertTrue(fx(() -> rows(view).stream().anyMatch(row -> row.contains("Contacto actualizado"))));
+
+            navigate(view, "Personas");
+            fx(() -> { button(view, "Nuevo").fire(); return null; });
+            await(() -> fx(() -> form() != null));
+            fx(() -> {
+                text(form(), "doc", "CRUD-" + suffix);
+                text(form(), "name", "Persona original " + suffix);
+                selectChoice(form(), "#company", " · " + company);
+                button(form(), "Guardar").fire();
+                return null;
+            });
+            await(() -> fx(() -> form() == null));
+            awaitIdle(view);
+            selectRowContaining(view, "CRUD-" + suffix);
+            fx(() -> { button(view, "Editar").fire(); return null; });
+            await(() -> fx(() -> form() != null));
+            fx(() -> {
+                text(form(), "name", "Persona editada " + suffix);
+                selectChoice(form(), "#state", "RESTRINGIDO");
+                button(form(), "Guardar").fire();
+                return null;
+            });
+            await(() -> fx(() -> form() == null));
+            awaitIdle(view);
+            assertTrue(fx(() -> rows(view).stream().anyMatch(row -> row.contains("Persona editada " + suffix) && row.contains("RESTRINGIDO"))));
+            selectRowContaining(view, "CRUD-" + suffix);
+            archiveSelected(view);
+            assertTrue(fx(() -> rows(view).stream().anyMatch(row -> row.contains("CRUD-" + suffix) && row.contains("BAJA"))));
+            selectRowContaining(view, "CRUD-" + suffix);
+            fx(() -> { button(view,"Editar").fire(); return null; });
+            await(() -> fx(() -> form()!=null));
+            assertEquals("BAJA",fx(() -> ((ComboBox<?>)form().lookup("#state")).getValue()));
+            fx(() -> { text(form(),"name","Persona de baja editada"); button(form(),"Guardar").fire(); return null; });
+            await(() -> fx(() -> form()==null));
+            awaitIdle(view);
+            assertTrue(fx(() -> rows(view).stream().anyMatch(row -> row.contains("CRUD-" + suffix) && row.contains("BAJA"))));
+
+            navigate(view, "Usuarios");
+            String email = "crud-" + suffix + "@ui.sica.local";
+            fx(() -> { button(view, "Nuevo").fire(); return null; });
+            await(() -> fx(() -> form() != null));
+            fx(() -> {
+                text(form(), "email", email);
+                text(form(), "name", "Usuario formularios");
+                text(form(), "password", "Ui-Crud-seguro-2026");
+                button(form(), "Guardar").fire();
+                return null;
+            });
+            await(() -> fx(() -> form() == null));
+            awaitIdle(view);
+            selectRowContaining(view, email);
+            fx(() -> { button(view, "Editar").fire(); return null; });
+            await(() -> fx(() -> form() != null));
+            fx(() -> { text(form(), "name", "Usuario editado"); button(form(), "Guardar").fire(); return null; });
+            await(() -> fx(() -> form() == null));
+            awaitIdle(view);
+            Session created = sica.login(email, "Ui-Crud-seguro-2026");
+            sica.logout(created);
+            selectRowContaining(view, email);
+            archiveSelected(view);
+            assertThrows(SicaException.class, () -> sica.login(email, "Ui-Crud-seguro-2026"));
+            navigate(view, "Empresas");
+            selectRowContaining(view, "CRUD-" + suffix);
+            archiveSelected(view);
+            assertFalse(sica.companies(session).stream().anyMatch(option -> option.id() == company));
+        } finally {
+            fx(() -> { controller.close(); return null; });
+        }
+    }
+
+    private static void text(Parent root, String id, String value) {
+        ((TextInputControl) root.lookup("#" + id)).setText(value);
+    }
+
+    private static long selectRowContaining(Parent view, String value) throws Exception {
+        awaitIdle(view);
+        return fx(() -> {
+            List<String> row = rows(view).stream().filter(candidate -> candidate.contains(value)).findFirst().orElseThrow();
+            table(view).getSelectionModel().select(row);
+            return Long.parseLong(row.getFirst());
+        });
+    }
+
+    private static void archiveSelected(Parent view) throws Exception {
+        Platform.runLater(() -> button(view, "Dar de baja").fire());
+        await(() -> fx(() -> dialog("Dar de baja") != null));
+        fx(() -> { ((Button) dialog("Dar de baja").lookupButton(ButtonType.OK)).fire(); return null; });
+        awaitIdle(view);
+        assertFalse(fx(() -> view.lookup("#status").getStyleClass().contains("error")));
+    }
+
+    @Test void informationButtonPlaysSeeksPausesAndDisposesTheEmbeddedTutorial() throws Exception {
+        ShellController controller = new ShellController(sica, session, tasks, () -> {});
+        Parent view = fx(() -> { controllers.add(controller); return load("/fxml/shell.fxml", controller); });
+        try {
+            awaitIdle(view);
+            fx(() -> { ((Button) view.lookup("#helpButton")).fire(); return null; });
+            await(() -> fx(() -> tutorialRoot() != null));
+            Parent tutorial = fx(UiRenderingTest::tutorialRoot);
+            await(() -> fx(() -> {
+                var player = ((javafx.scene.media.MediaView) tutorial.lookup("#tutorialVideo")).getMediaPlayer();
+                return player != null && (player.getStatus() == javafx.scene.media.MediaPlayer.Status.READY || player.getError() != null);
+            }));
+            var player = fx(() -> ((javafx.scene.media.MediaView) tutorial.lookup("#tutorialVideo")).getMediaPlayer());
+            assertNull(fx(player::getError));
+            assertTrue(fx(() -> player.getTotalDuration().toSeconds()) > 880);
+            assertEquals(25, fx(() -> ((ListView<?>) tutorial.lookup("#chapters")).getItems().size()));
+            fx(() -> {
+                ((Slider) tutorial.lookup("#volume")).setValue(0);
+                ((Button) tutorial.lookup("#playPause")).fire();
+                return null;
+            });
+            await(() -> fx(() -> player.getCurrentTime().toSeconds() > .5));
+            assertTrue(fx(() -> player.getMedia().getTracks().stream().anyMatch(javafx.scene.media.VideoTrack.class::isInstance)));
+            fx(() -> { ((ListView<?>) tutorial.lookup("#chapters")).getSelectionModel().select(13); return null; });
+            await(() -> fx(() -> player.getCurrentTime().toSeconds() >= 458));
+            fx(() -> { ((Button) tutorial.lookup("#playPause")).fire(); return null; });
+            await(() -> fx(() -> player.getStatus() == javafx.scene.media.MediaPlayer.Status.PAUSED));
+            double paused = fx(() -> player.getCurrentTime().toSeconds());
+            Thread.sleep(300);
+            assertEquals(paused, fx(() -> player.getCurrentTime().toSeconds()), .15);
+            fx(() -> {
+                @SuppressWarnings("unchecked") ComboBox<Double> rates = (ComboBox<Double>) tutorial.lookup("#speed");
+                rates.setValue(1.5);
+                return null;
+            });
+            assertEquals(1.5, fx(player::getRate));
+            snapshot(tutorial, "videotutorial");
+            fx(() -> { ((Button) view.lookup("#helpButton")).fire(); return null; });
+            assertEquals(1, fx(() -> Window.getWindows().stream().filter(window -> window.getScene().lookup("#tutorialVideo") != null).count()));
+            fx(() -> { ((Button) tutorial.lookup("#tutorialClose")).fire(); return null; });
+            await(() -> fx(() -> player.getStatus() == javafx.scene.media.MediaPlayer.Status.DISPOSED));
+            fx(() -> { ((Button) view.lookup("#helpButton")).fire(); return null; });
+            await(() -> fx(() -> tutorialRoot() != null));
+            fx(() -> { controller.close(); return null; });
+            assertNull(fx(UiRenderingTest::tutorialRoot));
+        } finally {
+            fx(() -> { controller.close(); return null; });
+        }
+    }
+
+    private static Parent tutorialRoot() {
+        return Window.getWindows().stream().filter(Window::isShowing).map(window -> window.getScene().getRoot())
+                .filter(root -> root.lookup("#tutorialVideo") != null).findFirst().orElse(null);
+    }
+
+    @Test void aBlockedKeychainReadCannotDelayManualAuthentication() throws Exception {
+        MemoryLogins memory = new MemoryLogins();
+        memory.readStarted = new CountDownLatch(1);
+        memory.releaseRead = new CountDownLatch(1);
+        AtomicReference<Session> authenticated = new AtomicReference<>();
+        Parent view = loginView(memory, authenticated, ignored -> {});
+        assertTrue(memory.readStarted.await(5, TimeUnit.SECONDS));
+        long started = System.nanoTime();
+        try {
+            fx(() -> { fillLogin(view, adminEmail, adminPassword); ((Button) view.lookup("#submit")).fire(); return null; });
+            await(() -> authenticated.get() != null);
+            assertTrue(System.nanoTime()-started < TimeUnit.SECONDS.toNanos(3), "El acceso manual no debe esperar la lectura del llavero");
+        } finally {
+            memory.releaseRead.countDown();
+            if (authenticated.get() != null) sica.logout(authenticated.get());
+        }
+    }
+
+    @Test void editingFormsKeepTheExistingInactiveCompanySelected() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0,8);
+        long company = sica.saveCompany(session, null, new Company("INACT-"+suffix,"Empresa inactiva de edición",true));
+        String document = "INACT-"+suffix;
+        sica.savePerson(session, null, new PersonForm(document,"Trabajador con empresa inactiva","TRABAJADOR",company,"","HABILITADO"));
+        String email = "inact-"+suffix+"@ui.sica.local";
+        sica.saveUser(session,null,new UserForm(email,"Funcionario con empresa inactiva","Ui-Usuario-seguro-2026",true,"FUNCIONARIO",company));
+        sica.archive(session,Entity.EMPRESAS,company);
+        ShellController controller = new ShellController(sica, session, tasks, () -> {});
+        Parent view = fx(() -> { controllers.add(controller); return load("/fxml/shell.fxml",controller); });
+        try {
+            for (String module : List.of("Personas","Usuarios")) {
+                navigate(view,module);
+                selectRowContaining(view,module.equals("Personas")?document:email);
+                fx(() -> { button(view,"Editar").fire(); return null; });
+                await(() -> fx(() -> form()!=null));
+                assertEquals("Empresa inactiva · "+company,fx(() -> ((ComboBox<?>) form().lookup("#company")).getValue()));
+                fx(() -> { text(form(),"name","Datos corregidos sin traslado"); button(form(),"Guardar").fire(); return null; });
+                await(() -> fx(() -> form()==null));
+                awaitIdle(view);
+            }
+            Data people = sica.report(session,Report.PERSONAS,document,null,null);
+            assertEquals(Long.toString(company),people.rows().getFirst().get(4));
+            Data users = sica.report(session,Report.USUARIOS,email,null,null);
+            assertEquals(Long.toString(company),users.rows().getFirst().get(5));
+        } finally { fx(() -> { controller.close(); return null; }); }
+    }
+
+    @Test void keychainWriteTimeoutStillOpensExactlyOneAuthenticatedSession() throws Exception {
+        CountDownLatch release=new CountDownLatch(1);
+        var logins=new SavedLoginStore() {
+            public boolean available(){return true;}
+            public Optional<Login> load(){return Optional.empty();}
+            public void save(Login login){
+                boolean done=false;
+                while(!done) try {done=release.await(10,TimeUnit.SECONDS);} catch(InterruptedException interrupted) { done=release.getCount()==0; }
+            }
+            public void clear(){}
+        };
+        AtomicReference<Session> authenticated=new AtomicReference<>();
+        AtomicReference<String> warning=new AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger callbacks=new java.util.concurrent.atomic.AtomicInteger();
+        Parent view=fx(()->{
+            var controller=new LoginController(sica,tasks,logins,result->{authenticated.set(result);callbacks.incrementAndGet();},warning::set);
+            loginControllers.add(controller);return load("/fxml/login.fxml",controller);
+        });
+        try {
+            await(()->fx(()->!view.lookup("#remember").isDisabled()));
+            fx(()->{fillLogin(view,adminEmail,adminPassword);((CheckBox)view.lookup("#remember")).setSelected(true);((Button)view.lookup("#submit")).fire();return null;});
+            await(()->authenticated.get()!=null && warning.get()!=null);
+            assertTrue(warning.get().contains("confirmar el guardado"));
+            release.countDown();
+            Thread.sleep(250);
+            assertEquals(1,callbacks.get());
+        } finally {release.countDown();if(authenticated.get()!=null)sica.logout(authenticated.get());}
+    }
 
     private static final class MemoryLogins implements SavedLoginStore {
         private volatile Login stored;
@@ -418,7 +829,7 @@ class UiRenderingTest {
         });
         await(() -> warning.get() != null);
         assertNotNull(authenticated.get());
-        assertTrue(warning.get().contains("No se pudieron guardar"));
+        assertTrue(warning.get().contains("No se pudo confirmar el guardado"));
         assertNull(memory.stored);
         sica.logout(authenticated.get());
     }
@@ -506,7 +917,7 @@ class UiRenderingTest {
         });
         int width = (int) rendered.getWidth();
         int height = (int) rendered.getHeight();
-        assertTrue(width >= 400 && height >= 300);
+        assertTrue(width >= 400 && height >= (root instanceof DialogPane ? 200 : 300));
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         int[] pixels = new int[width * height];
         rendered.getPixelReader().getPixels(0, 0, width, height,
