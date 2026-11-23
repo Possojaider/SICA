@@ -3,6 +3,8 @@ package com.sica.presentation;
 import com.sica.domain.port.in.SicaUseCases;
 
 import com.sica.domain.Session;
+import com.sica.domain.Permissions;
+import com.sica.presentation.ShellNavigation.Page;
 
 import com.sica.application.*;
 import com.sica.domain.SicaException;
@@ -21,8 +23,7 @@ import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 public final class ShellController implements AutoCloseable {
-    private record Page(String name, Report report) {}
-    private record Snapshot(Data data, Statistics stats, Set<String> permissions, List<Option> companies, long unread) {}
+    private record Snapshot(Page page, Data data, Statistics stats, Set<String> permissions, List<Option> companies, long unread) {}
     private record QrView(Credential credential, byte[] image) {}
     private final SicaUseCases sica;
     private final Session session;
@@ -36,6 +37,9 @@ public final class ShellController implements AutoCloseable {
     private Page page = new Page("Panel principal", Report.VISITAS);
     private boolean busy;
     private boolean closed;
+    private boolean updatingNavigation;
+    private boolean refreshPending;
+    private TutorialController tutorial;
     private long generation;
     private final DashboardViewModel dashboard = new DashboardViewModel();
     @FXML private VBox navigation;
@@ -66,11 +70,14 @@ public final class ShellController implements AutoCloseable {
                 status.setText("Hay nuevas solicitudes pendientes de aprobación.");
             }
         });
-        stateFilter.getItems().setAll("Todos", "PENDIENTE", "APROBADA", "RECHAZADA", "DENTRO", "CERRADA", "SALIDA_OLVIDADA");
+        stateFilter.getItems().setAll("Todos", "PENDIENTE", "APROBADA", "RECHAZADA", "DENTRO", "CERRADA", "SALIDA_OLVIDADA", "EXPIRADA");
         stateFilter.setValue("Todos");
         stateFilter.setOnAction(event -> render(presenter.data()));
         reportType.setOnAction(event -> {
-            if ("Reportes".equals(page.name())) refresh();
+            if (!updatingNavigation && "Reportes".equals(page.name())) {
+                generation++;
+                refresh();
+            }
         });
         refresh();
         polling = tasks.poll(() -> {
@@ -79,55 +86,39 @@ public final class ShellController implements AutoCloseable {
     }
 
     private void navigation() {
-        navigation.getChildren().clear();
-        menu("Panel principal", Report.VISITAS);
-        menu("Notificaciones", Report.NOTIFICACIONES);
-        if (permissions.contains("USUARIOS")) menu("Usuarios", Report.USUARIOS);
-        if (permissions.contains("EMPRESAS")) menu("Empresas", Report.EMPRESAS);
-        if (permissions.contains("PERSONAS_LEER")) menu("Personas", Report.PERSONAS);
-        if (permissions.contains("VISITAS_LEER")) menu("Registro de visitas", Report.VISITAS);
-        if (permissions.contains("ACCESO")) menu("Entradas y salidas", Report.VISITAS);
-        if (permissions.contains("VISITAS_LEER")) menu("Solicitudes pendientes", Report.SOLICITUDES);
-        if (permissions.contains("DECIDIR")) menu("Aprobar solicitudes", Report.SOLICITUDES);
-        if (permissions.contains("INCIDENTES")) menu("Incidentes", Report.INCIDENTES);
-        if (permissions.contains("AUDITORIA")) menu("Auditoría", Report.AUDITORIA);
-        if (permissions.contains("REPORTES")) menu("Reportes", Report.DENTRO);
+        ShellNavigation.build(navigation, page, permissions, this::navigate);
         reportNames.clear();
-        reportNames.put(Report.DENTRO, "Personas dentro del complejo");
-        reportNames.put(Report.HISTORIAL, "Historial de entradas y salidas");
-        reportNames.put(Report.VISITAS, "Visitas por fecha");
-        reportNames.put(Report.DECISIONES, "Solicitudes aprobadas y rechazadas");
-        if (permissions.contains("INCIDENTES")) reportNames.put(Report.INCIDENTES, "Incidentes registrados");
-        if (permissions.contains("AUDITORIA")) reportNames.put(Report.AUDITORIA, "Historial de auditoría");
+        reportNames.putAll(ShellNavigation.reports(permissions));
         String selected = reportType.getValue();
-        reportType.getItems().setAll(reportNames.values());
-        reportType.setValue(reportNames.containsValue(selected) ? selected : reportNames.get(Report.DENTRO));
+        updatingNavigation = true;
+        try {
+            reportType.getItems().setAll(reportNames.values());
+            reportType.setValue(reportNames.containsValue(selected) ? selected : reportNames.get(Report.DENTRO));
+        } finally {
+            updatingNavigation = false;
+        }
     }
 
-    private void menu(String title, Report report) {
-        Button button = new Button(title);
-        button.setMaxWidth(Double.MAX_VALUE);
-        button.getStyleClass().add("nav-button");
-        if (page.name().equals(title)) button.getStyleClass().add("selected");
-        button.setOnAction(event -> {
-            if (busy) return;
-            generation++;
-            page = new Page(title, report);
-            navigation.getChildren().forEach(node -> node.getStyleClass().remove("selected"));
-            button.getStyleClass().add("selected");
-            search.clear();
-            from.setValue(null);
-            until.setValue(null);
-            stateFilter.getItems().setAll(report == Report.NOTIFICACIONES
-                    ? List.of("Todos", "SIN_LEER", "LEIDA")
-                    : List.of("Todos", "PENDIENTE", "APROBADA", "RECHAZADA", "DENTRO", "CERRADA", "SALIDA_OLVIDADA"));
-            stateFilter.setValue(title.contains("solicitudes") || title.contains("pendientes") ? "PENDIENTE" : "Todos");
-            heading.setText(title);
-            status.setText("");
-            updateLayout();
-            refresh();
-        });
-        navigation.getChildren().add(button);
+    private void navigate(Page destination) {
+        String title = destination.name();
+        Report report = destination.report();
+        if (busy) return;
+        generation++;
+        page = new Page(title, report);
+        navigation.getChildren().forEach(node -> node.getStyleClass().remove("selected"));
+        navigation.getChildren().stream().filter(Button.class::isInstance).map(Button.class::cast)
+                .filter(button -> button.getText().equals(title)).forEach(button -> button.getStyleClass().add("selected"));
+        search.clear();
+        from.setValue(null);
+        until.setValue(null);
+        stateFilter.getItems().setAll(report == Report.NOTIFICACIONES
+                ? List.of("Todos", "SIN_LEER", "LEIDA")
+                : List.of("Todos", "PENDIENTE", "APROBADA", "RECHAZADA", "DENTRO", "CERRADA", "SALIDA_OLVIDADA", "EXPIRADA"));
+        stateFilter.setValue(title.contains("solicitudes") || title.contains("pendientes") ? "PENDIENTE" : "Todos");
+        heading.setText(title);
+        status.setText("");
+        updateLayout();
+        refresh();
     }
 
     private void updateLayout() {
@@ -150,11 +141,10 @@ public final class ShellController implements AutoCloseable {
         actions.getChildren().clear();
         switch (page.name()) {
             case "Usuarios", "Empresas", "Personas" -> {
-                if (!page.name().equals("Personas") || permissions.contains("PERSONAS_CREAR")) action("Nuevo", () -> edit(false), true);
-                if (!page.name().equals("Personas") || permissions.contains("PERSONAS")) {
-                    action("Editar", () -> edit(true), false);
-                    action("Dar de baja", this::archive, false);
-                }
+                Entity entity = Entity.valueOf(page.report().name());
+                if (permissions.contains(Permissions.create(entity))) action("Nuevo", () -> edit(false), true);
+                if (permissions.contains(Permissions.edit(entity))) action("Editar", () -> edit(true), false);
+                if (permissions.contains(Permissions.archive(entity))) action("Dar de baja", this::archive, false);
                 if (page.name().equals("Personas")) action("Ver fotografía", this::photo, false);
             }
             case "Notificaciones" -> {
@@ -254,18 +244,50 @@ public final class ShellController implements AutoCloseable {
                 .map(Map.Entry::getKey).findFirst().orElse(Report.DENTRO);
     }
 
-    @FXML private void refresh() { load(false); }
+    @FXML private void refresh() {
+        if (busy) refreshPending = true;
+        else load(false);
+    }
+
+    private static boolean canView(Page page, Report report, Set<String> permissions) {
+        String permission = Permissions.read(report);
+        return (permission == null || permissions.contains(permission)) && switch (page.name()) {
+            case "Entradas y salidas" -> permissions.contains("ACCESO");
+            case "Aprobar solicitudes" -> permissions.contains("DECIDIR");
+            case "Reportes" -> permissions.contains("REPORTES");
+            default -> true;
+        };
+    }
 
     private void load(boolean automatic) {
         if (busy || closed) return;
         Report report = currentReport();
+        Page requestedPage = page;
         String query = search.getText();
         LocalDateTime begin = from.getValue() == null ? null : from.getValue().atStartOfDay();
         LocalDateTime end = until.getValue() == null ? null : until.getValue().plusDays(1).atStartOfDay();
         long requestGeneration = generation;
-        run(() -> new Snapshot(sica.report(session, report, query, begin, end), sica.statistics(session),
-                        sica.permissions(session), sica.companies(session), sica.unreadNotifications(session)), snapshot -> {
+        run(() -> {
+            Set<String> currentPermissions = sica.permissions(session);
+            boolean allowed = canView(requestedPage, report, currentPermissions);
+            Page destination = allowed ? requestedPage : new Page("Notificaciones", Report.NOTIFICACIONES);
+            Data data = sica.report(session, allowed ? report : destination.report(),
+                    allowed ? query : "", allowed ? begin : null, allowed ? end : null);
+            Statistics stats = currentPermissions.contains("VISITAS_LEER")
+                    ? sica.statistics(session) : new Statistics(0, 0, 0, 0);
+            return new Snapshot(destination, data, stats, currentPermissions,
+                    sica.companies(session), sica.unreadNotifications(session));
+        }, snapshot -> {
             if (requestGeneration != generation) return;
+            if (!page.equals(snapshot.page())) {
+                page = snapshot.page();
+                heading.setText(page.name());
+                search.clear();
+                from.setValue(null);
+                until.setValue(null);
+                stateFilter.getItems().setAll("Todos", "SIN_LEER", "LEIDA");
+                stateFilter.setValue("Todos");
+            }
             boolean permissionsChanged = !permissions.equals(snapshot.permissions());
             permissions = snapshot.permissions();
             companies = snapshot.companies();
@@ -304,7 +326,7 @@ public final class ShellController implements AutoCloseable {
         switch (page.report()) {
             case USUARIOS -> editor.user(selected);
             case EMPRESAS -> editor.company(selected);
-            case PERSONAS -> editor.person(selected, permissions.contains("PERSONAS"));
+            case PERSONAS -> editor.person(selected, permissions.contains("PERSONAS_EDITAR") || (!existing && permissions.contains("TRABAJADORES_CREAR")));
             default -> throw new SicaException("Selecciona una entidad editable.");
         }
     }
@@ -352,23 +374,7 @@ public final class ShellController implements AutoCloseable {
     }
 
     private void photo() {
-        String url = presenter.selected().getOrDefault("Foto", "");
-        if (url.isBlank()) throw new SicaException("Esta persona no tiene una fotografía registrada.");
-        Image image = new Image(url, 500, 500, true, true, true);
-        ImageView view = new ImageView(image);
-        Label message = new Label("Cargando fotografía…");
-        image.progressProperty().addListener((observable, oldValue, value) -> {
-            if (value.doubleValue() >= 1) message.setText(image.isError() ? "No se pudo cargar la fotografía." : "");
-        });
-        image.errorProperty().addListener((observable, oldValue, failed) -> {
-            if (failed) message.setText("No se pudo cargar la fotografía.");
-        });
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.initOwner(table.getScene().getWindow());
-        alert.setHeaderText("Fotografía de identificación");
-        alert.getDialogPane().setContent(new VBox(10, view, message));
-        alert.setOnHidden(event -> image.cancel());
-        alert.show();
+        PhotoDialog.show(table.getScene().getWindow(), presenter.selected().getOrDefault("Foto", ""));
     }
 
     private void export() {
@@ -406,6 +412,12 @@ public final class ShellController implements AutoCloseable {
         run(() -> { sica.logout(session); return null; }, result -> onLogout.run());
     }
 
+    @FXML private void help() {
+        if (tutorial == null || tutorial.isClosed()) {
+            tutorial = TutorialController.open(table.getScene().getWindow(), tasks);
+        } else tutorial.show();
+    }
+
     private <T> void run(Callable<T> operation, Consumer<T> success) {
         busy = true;
         loading.setManaged(true);
@@ -420,11 +432,20 @@ public final class ShellController implements AutoCloseable {
             } catch (RuntimeException failure) {
                 error(failure);
             }
+            drainRefresh();
         }, failure -> {
             if (closed) return;
             idle();
             error(failure);
+            drainRefresh();
         });
+    }
+
+    private void drainRefresh() {
+        if (refreshPending && !busy && !closed) {
+            refreshPending = false;
+            refresh();
+        }
     }
 
     private void idle() {
@@ -443,6 +464,7 @@ public final class ShellController implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        if (tutorial != null) tutorial.close();
         generation++;
         if (polling != null) polling.cancel(false);
     }

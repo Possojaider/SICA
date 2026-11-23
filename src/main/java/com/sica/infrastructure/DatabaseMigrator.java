@@ -39,7 +39,10 @@ public final class DatabaseMigrator {
                     populateCodes(statement);
                     // Los catálogos y sus permisos iniciales se instalan una sola vez.
                     try (var check = statement.executeQuery("SELECT 1 FROM migraciones_esquema WHERE version='base-academica-v3'")) {
-                        if (check.next()) return;
+                        if (check.next()) {
+                            PermissionMigration.upgrade(connection);
+                            return;
+                        }
                     }
                     connection.setAutoCommit(false);
                     SchemaScripts.execute(connection, "/db/data.sql", true);
@@ -90,6 +93,13 @@ public final class DatabaseMigrator {
         SchemaScripts.addColumn(c, "visitas", "qr_hash", "CHAR(64) UNIQUE");
         SchemaScripts.addColumn(c, "visitas", "persona_dentro",
                 "INT GENERATED ALWAYS AS (CASE WHEN fecha_entrada IS NOT NULL AND fecha_salida IS NULL THEN persona_id END) STORED UNIQUE");
+        boolean expirationIndex = false;
+        try (var indexes = c.getMetaData().getIndexInfo(c.getCatalog(), null, "visitas", false, false)) {
+            while (indexes.next()) if ("idx_visitas_vencimiento".equals(indexes.getString("INDEX_NAME"))) expirationIndex = true;
+        }
+        if (!expirationIndex) try (var statement = c.createStatement()) {
+            statement.execute("CREATE INDEX idx_visitas_vencimiento ON visitas (estado_visita_id,fin_programado,id)");
+        }
         addForeignKey(c, "usuarios", "empresa_id", "empresas");
         addForeignKey(c, "visitas", "empresa_id", "empresas");
         addForeignKey(c, "visitas", "solicitado_por_id", "usuarios");

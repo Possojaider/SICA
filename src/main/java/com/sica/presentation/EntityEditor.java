@@ -27,7 +27,7 @@ final class EntityEditor {
 
     void company(Map<String, String> row) {
         Long id = id(row);
-        new FormDialog(owner, id == null ? "Nueva empresa" : "Editar empresa")
+        new FormDialog(owner, id == null ? "Nueva empresa" : "Editar empresa", "/fxml/forms/company.fxml")
                 .text("nit", "NIT", row.getOrDefault("NIT", ""))
                 .text("name", "Nombre", row.getOrDefault("Nombre", ""))
                 .text("contact", "Contacto principal", row.getOrDefault("Contacto", ""))
@@ -38,14 +38,14 @@ final class EntityEditor {
 
     void person(Map<String, String> row, boolean manage) {
         Long id = id(row);
-        FormDialog form = new FormDialog(owner, id == null ? "Registrar persona" : "Editar persona")
+        FormDialog form = new FormDialog(owner, id == null ? "Registrar persona" : "Editar persona", "/fxml/forms/person.fxml")
                 .text("doc", "Documento", row.getOrDefault("Documento", ""))
                 .text("name", "Nombre completo", row.getOrDefault("Nombre", ""))
                 .choices("type", "Tipo", manage ? List.of("INVITADO", "TRABAJADOR") : List.of("INVITADO"),
                         row.getOrDefault("Tipo", "INVITADO"))
-                .choices("company", "Empresa", companyOptions(), companyValue(row.get("Empresa")))
+                .choices("company", "Empresa", companyOptions(row.get("Empresa")), companyValue(row.get("Empresa")))
                 .text("photo", "Foto · URL HTTPS", row.getOrDefault("Foto", ""))
-                .choices("state", "Acceso", manage ? List.of("HABILITADO", "RESTRINGIDO") : List.of("HABILITADO"),
+                .choices("state", "Acceso", manage ? ("BAJA".equals(row.get("Estado")) ? List.of("HABILITADO", "RESTRINGIDO", "BAJA") : List.of("HABILITADO", "RESTRINGIDO")) : List.of("HABILITADO"),
                         row.getOrDefault("Estado", "HABILITADO"));
         form.show(tasks, values -> {
             Long company = companyId(values.get("company"));
@@ -56,13 +56,13 @@ final class EntityEditor {
 
     void user(Map<String, String> row) {
         Long id = id(row);
-        new FormDialog(owner, id == null ? "Nuevo usuario" : "Editar usuario")
+        new FormDialog(owner, id == null ? "Nuevo usuario" : "Editar usuario", "/fxml/forms/user.fxml")
                 .text("email", "Correo", row.getOrDefault("Correo", ""))
                 .text("name", "Nombre", row.getOrDefault("Nombre", ""))
                 .secret("password", id == null ? "Contraseña" : "Contraseña · vacío conserva")
                 .choices("role", "Rol", List.of("SUPER", "SUPERVISOR", "GUARDA", "FUNCIONARIO"),
                         row.getOrDefault("Rol", "GUARDA"))
-                .choices("company", "Empresa", companyOptions(), companyValue(row.get("Empresa")))
+                .choices("company", "Empresa", companyOptions(row.get("Empresa")), companyValue(row.get("Empresa")))
                 .choices("active", "Estado", List.of("Activo", "Inactivo"), "0".equals(row.get("Activo")) ? "Inactivo" : "Activo")
                 .show(tasks, values -> {
                     Long company = companyId(values.get("company"));
@@ -71,16 +71,19 @@ final class EntityEditor {
                 }, saved);
     }
 
-    private List<String> companyOptions() {
+    private List<String> companyOptions(String current) {
         List<String> result = new ArrayList<>();
         result.add("Sin empresa");
         companies.forEach(company -> result.add(company.toString()));
+        if (current != null && !current.isBlank() && companies.stream().noneMatch(c -> Long.toString(c.id()).equals(current))) {
+            result.add("Empresa inactiva · " + current);
+        }
         return result;
     }
 
     private String companyValue(String id) {
         return companies.stream().filter(company -> Long.toString(company.id()).equals(id))
-                .map(Option::toString).findFirst().orElse("Sin empresa");
+                .map(Option::toString).findFirst().orElse(id == null || id.isBlank() ? "Sin empresa" : "Empresa inactiva · " + id);
     }
 
     static Long companyId(String value) {

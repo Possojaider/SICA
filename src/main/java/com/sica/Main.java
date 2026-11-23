@@ -7,7 +7,8 @@ import javafx.application.Application;
 import java.util.Arrays;
 
 public final class Main {
-    private Main() {}
+    private Main() {
+    }
 
     public static void main(String[] args) {
         try {
@@ -28,9 +29,13 @@ public final class Main {
                 var console = System.console();
                 String email = LocalEnvironment.load().get("SICA_ADMIN_EMAIL");
                 String password = LocalEnvironment.load().get("SICA_ADMIN_PASSWORD");
-                if (email == null && console != null) email = console.readLine("Correo del administrador: ");
-                if (password == null && console != null) password = new String(console.readPassword("Contraseña (12 caracteres mínimo): "));
-                if (email == null || password == null) throw new SicaException("Define SICA_ADMIN_EMAIL y SICA_ADMIN_PASSWORD o usa una consola interactiva.");
+                if (email == null && console != null)
+                    email = console.readLine("Correo del administrador: ");
+                if (password == null && console != null)
+                    password = new String(console.readPassword("Contraseña (12 caracteres mínimo): "));
+                if (email == null || password == null)
+                    throw new SicaException(
+                            "Define SICA_ADMIN_EMAIL y SICA_ADMIN_PASSWORD o usa una consola interactiva.");
                 ApplicationFactory.create(Configuration.environment()).bootstrap(email, password);
                 System.out.println("Administrador creado y auditado.");
             } else {

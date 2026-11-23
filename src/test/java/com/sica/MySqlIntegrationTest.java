@@ -225,6 +225,28 @@ class MySqlIntegrationTest {
         assertEquals(List.of(own.company()), sica.companies(official).stream().map(Option::id).toList());
     }
 
+    @Test void customPersonManagementPermissionCannotMoveOrArchiveAnotherCompanysPerson() throws Exception {
+        Fixture own = fixture("INVITADO");
+        Fixture other = fixture("INVITADO");
+        Session official = official(own.company());
+        sql("INSERT INTO rol_permisos SELECT r.id,p.id FROM roles r CROSS JOIN permisos p WHERE r.codigo='FUNCIONARIO' AND p.codigo IN ('PERSONAS_EDITAR','PERSONAS_BAJA')");
+        String document = scalar("SELECT documento_identidad FROM personas WHERE id=?", other.person());
+        try {
+            assertThrows(SicaException.class, () -> sica.savePerson(official, other.person(),
+                    new PersonForm(document, "Intento de traslado", "INVITADO", own.company(), "", "HABILITADO")));
+            assertThrows(SicaException.class, () -> sica.archive(official, Entity.PERSONAS, other.person()));
+            assertEquals(Long.toString(other.company()), scalar("SELECT empresa_id FROM personas WHERE id=?", other.person()));
+            assertEquals("HABILITADO", scalar("SELECT codigo FROM persona_estados_acceso WHERE id=(SELECT estado_acceso_id FROM personas WHERE id=?)", other.person()));
+            String ownDocument = scalar("SELECT documento_identidad FROM personas WHERE id=?", own.person());
+            assertDoesNotThrow(() -> sica.savePerson(official, own.person(),
+                    new PersonForm(ownDocument, "Edición propia", "INVITADO", own.company(), "", "HABILITADO")));
+            assertDoesNotThrow(() -> sica.archive(official, Entity.PERSONAS, own.person()));
+        } finally {
+            sql("DELETE FROM rol_permisos WHERE rol_id=(SELECT id FROM roles WHERE codigo='FUNCIONARIO') AND permiso_id IN (SELECT id FROM permisos WHERE codigo IN ('PERSONAS_EDITAR','PERSONAS_BAJA'))");
+            sica.logout(official);
+        }
+    }
+
     @Test void crudDuplicatesInactivePeopleAndIncidentsAreValidated() throws Exception {
         Fixture f = fixture("INVITADO");
         String doc = scalar("SELECT documento_identidad FROM personas WHERE id=?", f.person());
@@ -409,6 +431,144 @@ class MySqlIntegrationTest {
             assertTrue(sica.report(otherOfficial, Report.NOTIFICACIONES, "", null, null).rows().isEmpty());
         } finally {
             sql("DELETE FROM rol_permisos WHERE rol_id=(SELECT id FROM roles WHERE codigo='FUNCIONARIO') AND permiso_id=(SELECT id FROM permisos WHERE codigo='ACCESO')");
+        }
+    }
+
+    @Test void independentJvmProcessesExchangeNotificationApprovalEntryIncidentAndExit() throws Exception {
+        Fixture f = fixture("INVITADO");
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String secret = "Proceso-seguro-2026";
+        String officialEmail = "proc-f-" + suffix + "@acme.co";
+        String guardEmail = "proc-g-" + suffix + "@acme.co";
+        sica.saveUser(admin, null, new UserForm(officialEmail, "Funcionario proceso", secret, true, "FUNCIONARIO", f.company()));
+        sica.saveUser(admin, null, new UserForm(guardEmail, "Guarda proceso", secret, true, "GUARDA", null));
+        long visit = request(f, AccessPolicy.NO_ANUNCIADA);
+        java.nio.file.Path log = java.nio.file.Files.createTempFile("sica-process-", ".log");
+        List<Process> processes = new ArrayList<>();
+        try {
+            for (String mode : List.of("entry", "approve")) {
+                ProcessBuilder builder = new ProcessBuilder(
+                        java.nio.file.Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                        "-cp", System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")),
+                        ProcessFlowClient.class.getName(), mode, Long.toString(visit));
+                builder.environment().putAll(Map.of("SICA_PROCESS_URL", url, "SICA_PROCESS_USER", user,
+                        "SICA_PROCESS_DB_PASSWORD", password, "SICA_PROCESS_NOW", clock.instant().toString(),
+                        "SICA_PROCESS_EMAIL", mode.equals("approve") ? officialEmail : guardEmail,
+                        "SICA_PROCESS_PASSWORD", secret));
+                builder.redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
+                processes.add(builder.start());
+            }
+            for (Process process : processes) {
+                assertTrue(process.waitFor(25, TimeUnit.SECONDS), "El proceso de acceso no terminó");
+                assertEquals(0, process.exitValue(), () -> {
+                    try { return java.nio.file.Files.readString(log); }
+                    catch (java.io.IOException failure) { return failure.toString(); }
+                });
+            }
+            assertEquals("CERRADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
+            assertEquals("1", scalar("SELECT COUNT(*) FROM incidentes WHERE visita_id=?", visit));
+            assertEquals("3", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE tabla_afectada='visitas' AND registro_id_afectado=? AND accion_realizada IN ('APROBAR','CHECK_IN','CHECK_OUT')", visit));
+        } finally {
+            for (Process process : processes) if (process.isAlive()) process.destroyForcibly().waitFor(5, TimeUnit.SECONDS);
+            java.nio.file.Files.deleteIfExists(log);
+        }
+    }
+
+    @Test void expirationPreservesHistoryInvalidatesQrAndIsIdempotentAcrossInstances() throws Exception {
+        Fixture f = fixture("INVITADO");
+        long visit = request(f, AccessPolicy.PREVIA);
+        var qr = sica.issueCredential(admin, visit);
+        Sica later = new Sica(store, new BcryptHasher(), Clock.offset(clock, Duration.ofHours(3)));
+        Session laterAdmin = later.login("admin@acme.co", "Admin-test-12345");
+        try {
+            Data report = later.report(laterAdmin, Report.VISITAS, Long.toString(visit), null, null);
+            assertTrue(report.rows().stream().anyMatch(row -> row.getFirst().equals(Long.toString(visit)) && row.get(6).equals("EXPIRADA")));
+            later.statistics(laterAdmin);
+            Sica second = new Sica(store, new BcryptHasher(), Clock.offset(clock, Duration.ofHours(3)));
+            Session secondSession = second.login("admin@acme.co", "Admin-test-12345");
+            try { second.report(secondSession, Report.VISITAS, "", null, null); }
+            finally { second.logout(secondSession); }
+            assertNull(scalar("SELECT qr_hash FROM visitas WHERE id=?", visit));
+            assertEquals("1", scalar("SELECT COUNT(*) FROM bitacora_auditoria WHERE accion_realizada='EXPIRAR' AND registro_id_afectado=?", visit));
+            assertEquals("1", scalar("SELECT COUNT(*) FROM visitas WHERE id=?", visit));
+            assertThrows(SicaException.class, () -> later.checkInWithCredential(laterAdmin, qr.code()));
+            assertThrows(SicaException.class, () -> later.checkIn(laterAdmin, visit));
+        } finally { later.logout(laterAdmin); }
+    }
+
+    @Test void expirationRespectsCompanyScopeAndNeverClosesAnInsideVisit() throws Exception {
+        Fixture own = fixture("INVITADO"), other = fixture("INVITADO");
+        long expired = request(own, AccessPolicy.NO_ANUNCIADA);
+        long otherVisit = request(other, AccessPolicy.PREVIA);
+        long inside = request(own, AccessPolicy.PREVIA);
+        sica.checkIn(admin, inside);
+        Session official = official(own.company());
+        String officialEmail = scalar("SELECT email FROM usuarios WHERE id=?", official.userId());
+        Sica later = new Sica(store, new BcryptHasher(), Clock.offset(clock, Duration.ofHours(3)));
+        Session officialLater = later.login(officialEmail, "Funcionario-12345");
+        try {
+            later.report(officialLater, Report.SOLICITUDES, "", null, null);
+            assertEquals("EXPIRADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", expired));
+            assertEquals("APROBADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", otherVisit));
+            assertEquals("DENTRO", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", inside));
+        } finally { later.logout(officialLater); sica.logout(official); }
+    }
+
+    @Test void expirationAndQrInvalidationRollBackIfAuditFails() throws Exception {
+        Fixture f = fixture("INVITADO");
+        long visit = request(f, AccessPolicy.PREVIA);
+        var qr = sica.issueCredential(admin, visit);
+        Sica later = new Sica(store, new BcryptHasher(), Clock.offset(clock, Duration.ofHours(3)));
+        Session laterAdmin = later.login("admin@acme.co", "Admin-test-12345");
+        sql("CREATE TRIGGER expiration_audit_failure BEFORE INSERT ON bitacora_auditoria FOR EACH ROW " +
+                "BEGIN IF NEW.accion_realizada='EXPIRAR' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Fallo de prueba'; END IF; END");
+        try {
+            assertThrows(SicaException.class, () -> later.report(laterAdmin, Report.VISITAS, "", null, null));
+            assertEquals("APROBADA", scalar("SELECT codigo FROM visita_estados WHERE id=(SELECT estado_visita_id FROM visitas WHERE id=?)", visit));
+            assertEquals(CredentialCodes.digest(qr.code()), scalar("SELECT qr_hash FROM visitas WHERE id=?", visit));
+        } finally { sql("DROP TRIGGER expiration_audit_failure"); later.logout(laterAdmin); }
+    }
+
+    @Test void editingRetainsInactiveCompanyButNewAssignmentsAreRejected() throws Exception {
+        Fixture f = fixture("TRABAJADOR");
+        String email = UUID.randomUUID().toString().substring(0,8) + "@acme.co";
+        long userId = sica.saveUser(admin, null, new UserForm(email, "Funcionario original", "Funcionario-12345", true, "FUNCIONARIO", f.company()));
+        String document = scalar("SELECT documento_identidad FROM personas WHERE id=?", f.person());
+        sica.archive(admin, Entity.EMPRESAS, f.company());
+        sica.savePerson(admin, f.person(), new PersonForm(document, "Trabajador corregido", "TRABAJADOR", f.company(), "", "RESTRINGIDO"));
+        sica.saveUser(admin, userId, new UserForm(email, "Funcionario corregido", "", false, "FUNCIONARIO", f.company()));
+        assertEquals(Long.toString(f.company()), scalar("SELECT empresa_id FROM personas WHERE id=?", f.person()));
+        assertEquals(Long.toString(f.company()), scalar("SELECT empresa_id FROM usuarios WHERE id=?", userId));
+        assertThrows(SicaException.class, () -> sica.savePerson(admin, null,
+                new PersonForm("INACTIVA", "Nueva persona", "INVITADO", f.company(), "", "HABILITADO")));
+        assertThrows(SicaException.class, () -> sica.saveUser(admin, null,
+                new UserForm("nuevo-inactivo@acme.co", "Nuevo", "Funcionario-12345", true, "FUNCIONARIO", f.company())));
+    }
+
+    @Test void editingAnArchivedPersonPreservesTheDisabledState() throws Exception {
+        Fixture f=fixture("INVITADO");
+        String document=scalar("SELECT documento_identidad FROM personas WHERE id=?",f.person());
+        sica.archive(admin,Entity.PERSONAS,f.person());
+        sica.savePerson(admin,f.person(),new PersonForm(document,"Datos corregidos","INVITADO",f.company(),"","BAJA"));
+        assertEquals("BAJA",scalar("SELECT codigo FROM persona_estados_acceso WHERE id=(SELECT estado_acceso_id FROM personas WHERE id=?)",f.person()));
+        assertThrows(SicaException.class,()->request(f,AccessPolicy.PREVIA));
+        Fixture active=fixture("INVITADO");
+        String activeDocument=scalar("SELECT documento_identidad FROM personas WHERE id=?",active.person());
+        assertThrows(SicaException.class,()->sica.savePerson(admin,active.person(),new PersonForm(activeDocument,"Baja por edición","INVITADO",active.company(),"","BAJA")));
+    }
+
+    @Test void actionPermissionsCanBeRevokedIndividuallyAndMigrationNeverRestoresThem() throws Exception {
+        sql("DELETE FROM rol_permisos WHERE rol_id=(SELECT id FROM roles WHERE codigo='SUPER') AND permiso_id=(SELECT id FROM permisos WHERE codigo='EMPRESAS_EDITAR')");
+        try {
+            assertTrue(sica.permissions(admin).contains("EMPRESAS_CREAR"));
+            long company = sica.saveCompany(admin, null, new Company("ACTION-"+UUID.randomUUID().toString().substring(0,8), "Permisos separados", true));
+            assertThrows(SicaException.class, () -> sica.saveCompany(admin, company, new Company("", "Cambio denegado", true)));
+            assertDoesNotThrow(() -> sica.report(admin, Report.EMPRESAS, "", null, null));
+            DatabaseMigrator.upgrade(new Configuration(url, user, password, clock));
+            DatabaseMigrator.upgrade(new Configuration(url, user, password, clock));
+            assertFalse(sica.permissions(admin).contains("EMPRESAS_EDITAR"));
+        } finally {
+            sql("INSERT IGNORE INTO rol_permisos SELECT r.id,p.id FROM roles r CROSS JOIN permisos p WHERE r.codigo='SUPER' AND p.codigo='EMPRESAS_EDITAR'");
         }
     }
 

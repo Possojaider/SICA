@@ -87,6 +87,7 @@ CREATE TABLE visitas (
   FOREIGN KEY (empresa_id) REFERENCES empresas(id),
   INDEX (empresa_id, estado_visita_id, inicio_programado),
   INDEX (persona_id, estado_visita_id),
+  INDEX idx_visitas_vencimiento (estado_visita_id, fin_programado, id),
   CHECK (fin_programado IS NULL OR inicio_programado IS NULL OR fin_programado > inicio_programado)
 );
 CREATE TABLE incidentes (

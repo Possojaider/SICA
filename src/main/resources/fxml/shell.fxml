@@ -12,6 +12,10 @@
       <ScrollPane fitToWidth="true" hbarPolicy="NEVER" VBox.vgrow="ALWAYS" styleClass="navigation-scroll">
         <content><VBox fx:id="navigation" spacing="5"/></content>
       </ScrollPane>
+      <Button fx:id="helpButton" text="Videotutorial" onAction="#help" maxWidth="Infinity" styleClass="nav-button" accessibleText="Información y videotutorial de SICA">
+        <graphic><Label text="i" styleClass="info-symbol"/></graphic>
+        <tooltip><Tooltip text="Aprende a usar SICA · video y capítulos"/></tooltip>
+      </Button>
       <Button text="Cerrar sesión" onAction="#logout" maxWidth="Infinity" styleClass="nav-button"/>
     </VBox>
   </left>

@@ -17,9 +17,9 @@ import org.slf4j.LoggerFactory;
 import java.util.function.Consumer;
 
 public final class LoginController implements AutoCloseable {
-    private record Result(Session session, String warning) {}
     private final SicaUseCases sica;
     private final BackgroundTasks tasks;
+    private final CredentialTasks credentialTasks = new CredentialTasks();
     private final SavedLoginStore savedLogins;
     private final Consumer<Session> onLogin;
     private final Consumer<String> warning;
@@ -77,13 +77,13 @@ public final class LoginController implements AutoCloseable {
         restoring = true;
         remember.setDisable(true);
         long initialEdits = edits;
-        tasks.submit(savedLogins::load, result -> {
+        credentialTasks.submit(savedLogins::load, result -> {
             if (closed) return;
             restoring = false;
             remember.setDisable(submit.isDisabled());
             saved = result.isPresent();
             showForget(saved);
-            if (edits == initialEdits) result.ifPresent(login -> {
+            if (edits == initialEdits && !submit.isDisabled()) result.ifPresent(login -> {
                 email.setText(login.email());
                 password.setText(login.password());
                 remember.setSelected(true);
@@ -116,34 +116,22 @@ public final class LoginController implements AutoCloseable {
         boolean keep = remember.isSelected();
         busy(true, "Verificando acceso…");
         feedback("", false);
-        tasks.submit(() -> {
-            Session session = sica.login(loginEmail, secret);
-            String storageWarning = "";
-            if (savedLogins.available()) {
-                try {
-                    if (keep) savedLogins.save(new SavedLoginStore.Login(loginEmail, secret));
-                    else savedLogins.clear();
-                } catch (RuntimeException failure) {
-                    technical(failure, "No se pudo actualizar la cuenta recordada");
-                    storageWarning = keep
-                            ? "La sesión se inició. No se pudieron guardar los datos en el llavero."
-                            : "La sesión se inició. No se pudieron eliminar los datos previamente guardados.";
-                }
-            }
-            return new Result(session, storageWarning);
-        }, result -> {
-            if (closed) {
-                tasks.submit(() -> { sica.logout(result.session()); return null; }, ignored -> {}, failure -> technical(failure, "No se pudo cerrar la sesión descartada"));
+        tasks.submit(() -> sica.login(loginEmail, secret), session -> {
+            if (closed) { discard(session); return; }
+            if (!savedLogins.available() || (!keep && !saved)) {
+                finishLogin(session, "");
                 return;
             }
-            password.clear();
-            visiblePassword.setVisible(false);
-            visiblePassword.setManaged(false);
-            password.setVisible(true);
-            password.setManaged(true);
-            submit.setText("Acceso verificado");
-            onLogin.accept(result.session());
-            if (!result.warning().isEmpty()) warning.accept(result.warning());
+            credentialTasks.submit(() -> {
+                if (keep) savedLogins.save(new SavedLoginStore.Login(loginEmail, secret));
+                else savedLogins.clear();
+                return null;
+            }, ignored -> finishLogin(session, ""), failure -> {
+                technical(failure, "No se pudo actualizar la cuenta recordada");
+                finishLogin(session, keep
+                        ? "La sesión se inició. No se pudo confirmar el guardado de los datos en el llavero."
+                        : "La sesión se inició. No se pudo confirmar la eliminación de los datos guardados.");
+            });
         }, failure -> {
             if (closed) return;
             busy(false, "Iniciar sesión");
@@ -152,6 +140,23 @@ public final class LoginController implements AutoCloseable {
             feedback(failure instanceof SicaException ? failure.getMessage() : "No se pudo iniciar sesión.", false);
             (visiblePassword.isVisible() ? visiblePassword : password).requestFocus();
         });
+    }
+
+    private void discard(Session session) {
+        tasks.submit(() -> { sica.logout(session); return null; }, ignored -> {},
+                failure -> technical(failure, "No se pudo cerrar la sesión descartada"));
+    }
+
+    private void finishLogin(Session session, String storageWarning) {
+        if (closed) { discard(session); return; }
+        password.clear();
+        visiblePassword.setVisible(false);
+        visiblePassword.setManaged(false);
+        password.setVisible(true);
+        password.setManaged(true);
+        submit.setText("Acceso verificado");
+        onLogin.accept(session);
+        if (!storageWarning.isEmpty()) warning.accept(storageWarning);
     }
 
     @FXML
@@ -180,7 +185,7 @@ public final class LoginController implements AutoCloseable {
     private void forget(boolean clearFields) {
         if (submit.isDisabled() || restoring) return;
         busy(true, "Olvidando datos…");
-        tasks.submit(() -> { savedLogins.clear(); return null; }, ignored -> {
+        credentialTasks.submit(() -> { savedLogins.clear(); return null; }, ignored -> {
             if (closed) return;
             saved = false;
             remember.setSelected(false);
@@ -197,7 +202,7 @@ public final class LoginController implements AutoCloseable {
             if (closed) return;
             busy(false, "Iniciar sesión");
             remember.setSelected(saved);
-            feedback("No se pudieron olvidar los datos. Revisa la autorización del llavero.", false);
+            feedback("No se pudo confirmar que se olvidaran los datos. Revisa la autorización del llavero.", false);
             technical(failure, "No se pudieron olvidar las credenciales");
         });
     }
@@ -279,5 +284,6 @@ public final class LoginController implements AutoCloseable {
         if (entrance != null) entrance.stop();
         if (ambient != null) ambient.stop();
         password.clear();
+        credentialTasks.close();
     }
 }
