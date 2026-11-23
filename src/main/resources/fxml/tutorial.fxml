@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.image.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.media.*?>
+<?import javafx.geometry.Insets?>
+<BorderPane xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.sica.presentation.TutorialController" styleClass="tutorial-root">
+  <padding><Insets top="22" right="22" bottom="20" left="22"/></padding>
+  <top>
+    <HBox alignment="CENTER_LEFT" spacing="14" style="-fx-padding: 0 0 18 0;">
+      <Label text="i" styleClass="info-symbol,tutorial-info"/>
+      <VBox spacing="4" HBox.hgrow="ALWAYS">
+        <Label text="Aprende a usar SICA" styleClass="page-title"/>
+        <Label text="Videotutorial completo · narración y subtítulos en español · disponible sin internet" styleClass="muted" wrapText="true"/>
+      </VBox>
+      <Button fx:id="tutorialClose" text="Cerrar" onAction="#close"/>
+    </HBox>
+  </top>
+  <center>
+    <HBox spacing="20">
+      <VBox spacing="12" HBox.hgrow="ALWAYS" minWidth="500">
+        <StackPane fx:id="videoPane" minHeight="240" VBox.vgrow="ALWAYS" styleClass="tutorial-screen">
+          <MediaView fx:id="tutorialVideo" preserveRatio="true"/>
+          <ImageView fx:id="poster" preserveRatio="true" mouseTransparent="true"/>
+          <ProgressIndicator fx:id="preparing" maxWidth="40" maxHeight="40"/>
+        </StackPane>
+        <Label fx:id="message" text="Preparando el videotutorial…" wrapText="true" styleClass="muted"/>
+        <VBox fx:id="controls" spacing="12" disable="true">
+          <HBox alignment="CENTER_LEFT" spacing="12">
+            <Label fx:id="elapsed" text="00:00" minWidth="42"/>
+            <Slider fx:id="position" min="0" max="1" value="0" HBox.hgrow="ALWAYS" accessibleText="Posición del video"/>
+            <Label fx:id="total" text="00:00" minWidth="42"/>
+          </HBox>
+          <FlowPane hgap="10" vgap="10" alignment="CENTER_LEFT">
+            <Button fx:id="playPause" text="Reproducir" onAction="#togglePlayback" styleClass="primary"/>
+            <Button fx:id="restart" text="Desde el inicio" onAction="#restart"/>
+            <Label text="Volumen"/>
+            <Slider fx:id="volume" min="0" max="1" value="0.7" prefWidth="100" accessibleText="Volumen del tutorial"/>
+            <Label text="Velocidad"/>
+            <ComboBox fx:id="speed" prefWidth="82" accessibleText="Velocidad de reproducción"/>
+            <Button fx:id="fullscreen" text="Pantalla completa" onAction="#expand"/>
+          </FlowPane>
+        </VBox>
+      </VBox>
+      <VBox fx:id="chapterPane" spacing="10" prefWidth="290" minWidth="250" maxWidth="290">
+        <Label text="Capítulos" styleClass="tutorial-chapter-title"/>
+        <Label text="Selecciona un tema para verlo." styleClass="muted"/>
+        <ListView fx:id="chapters" VBox.vgrow="ALWAYS" disable="true" accessibleText="Capítulos del videotutorial"/>
+      </VBox>
+    </HBox>
+  </center>
+</BorderPane>

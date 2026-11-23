@@ -3,8 +3,6 @@ package com.sica.presentation;
 import com.sica.domain.SicaException;
 import javafx.scene.Node;
 import javafx.scene.control.*;
-import javafx.scene.layout.GridPane;
-import javafx.geometry.Insets;
 import javafx.stage.Window;
 import java.util.*;
 import java.util.concurrent.Callable;
@@ -13,27 +11,33 @@ import java.util.function.Supplier;
 
 final class FormDialog {
     private final Dialog<Void> dialog = new Dialog<>();
-    private final GridPane fields = new GridPane();
     private final Map<String, Supplier<String>> inputs = new LinkedHashMap<>();
-    private final Label error = new Label();
-    private final ButtonType saveType = new ButtonType("Guardar", ButtonBar.ButtonData.OK_DONE);
-    private int row;
+    private final Label error;
+    private final ButtonType saveType;
+    private final Map<String, Object> controls;
 
-    FormDialog(Window owner, String title) {
-        dialog.initOwner(owner);
-        dialog.setTitle(title);
-        dialog.setHeaderText(title);
-        dialog.getDialogPane().getButtonTypes().addAll(saveType, ButtonType.CANCEL);
-        dialog.getDialogPane().setId("sica-form");
-        dialog.getDialogPane().getStylesheets().add(getClass().getResource("/css/sica.css").toExternalForm());
-        fields.setHgap(16);
-        fields.setVgap(12);
-        fields.setPadding(new Insets(18));
-        dialog.getDialogPane().setContent(fields);
-        dialog.getDialogPane().setPrefWidth(610);
-        error.setId("form-error");
-        error.setWrapText(true);
-        error.getStyleClass().add("error");
+    FormDialog(Window owner, String title, String resource) {
+        try {
+            var loader = new javafx.fxml.FXMLLoader(getClass().getResource(resource));
+            DialogPane pane = loader.load();
+            controls = loader.getNamespace();
+            error = (Label) controls.get("formError");
+            saveType = pane.getButtonTypes().stream()
+                    .filter(type -> type.getButtonData() == ButtonBar.ButtonData.OK_DONE).findFirst().orElseThrow();
+            pane.getStylesheets().add(getClass().getResource("/css/sica.css").toExternalForm());
+            dialog.initOwner(owner);
+            dialog.setTitle(title);
+            dialog.setHeaderText(title);
+            dialog.setDialogPane(pane);
+        } catch (java.io.IOException failure) {
+            org.slf4j.LoggerFactory.getLogger(getClass()).error("No se pudo cargar el formulario {}", resource, failure);
+            throw new SicaException("No se pudo cargar el formulario.");
+        }
+    }
+
+    private <T extends Node> T control(String key, String label, Class<T> type) {
+        ((Label) controls.get(key + "Label")).setText(label);
+        return type.cast(controls.get(key));
     }
 
     FormDialog submitLabel(String label) {
@@ -42,45 +46,35 @@ final class FormDialog {
     }
 
     FormDialog text(String key, String label, String value) {
-        TextField input = new TextField(value);
-        input.setPrefWidth(320);
-        add(key, label, input, input::getText);
+        TextField input = control(key, label, TextField.class);
+        input.setText(value);
+        inputs.put(key, input::getText);
         return this;
     }
 
     FormDialog secret(String key, String label) {
-        PasswordField input = new PasswordField();
+        PasswordField input = control(key, label, PasswordField.class);
         input.setPromptText("12 caracteres mínimo");
-        add(key, label, input, input::getText);
+        inputs.put(key, input::getText);
         return this;
     }
 
+    @SuppressWarnings("unchecked")
     FormDialog choices(String key, String label, List<String> values, String selected) {
-        ComboBox<String> input = new ComboBox<>();
+        ComboBox<String> input = control(key, label, ComboBox.class);
         input.getItems().setAll(values);
-        input.setMaxWidth(Double.MAX_VALUE);
         input.setValue(values.contains(selected) ? selected : values.stream().findFirst().orElse(""));
-        add(key, label, input, () -> Objects.toString(input.getValue(), ""));
+        inputs.put(key, () -> Objects.toString(input.getValue(), ""));
         return this;
     }
 
     FormDialog multiline(String key, String label) {
-        TextArea input = new TextArea();
-        input.setWrapText(true);
-        input.setPrefRowCount(5);
-        add(key, label, input, input::getText);
+        TextArea input = control(key, label, TextArea.class);
+        inputs.put(key, input::getText);
         return this;
     }
 
-    private void add(String key, String label, Node input, Supplier<String> reader) {
-        input.setId(key);
-        fields.add(new Label(label), 0, row);
-        fields.add(input, 1, row++);
-        inputs.put(key, reader);
-    }
-
     void show(BackgroundTasks tasks, Function<Map<String, String>, Callable<?>> command, Runnable onSaved) {
-        fields.add(error, 0, row, 2, 1);
         Button save = (Button) dialog.getDialogPane().lookupButton(saveType);
         save.setId("form-save");
         Node cancel = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);

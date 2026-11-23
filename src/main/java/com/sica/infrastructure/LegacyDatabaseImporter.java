@@ -76,6 +76,7 @@ public final class LegacyDatabaseImporter {
                                 """.formatted(source));
                     }
                     verifyCounts(c, source);
+                    PermissionMigration.translate(c);
                     try (var marker = c.prepareStatement("INSERT INTO migraciones_esquema (version,origen) VALUES (?,?)")) {
                         marker.setString(1, version);
                         marker.setString(2, source);
@@ -86,7 +87,7 @@ public final class LegacyDatabaseImporter {
                             VALUES ('MIGRAR_BASE_ACADEMICA','migraciones_esquema','Datos importados desde el esquema anterior')
                             """);
                     c.commit();
-                } catch (SQLException | RuntimeException failure) {
+                } catch (SQLException | java.io.IOException | RuntimeException failure) {
                     c.rollback();
                     throw failure;
                 }
@@ -96,7 +97,7 @@ public final class LegacyDatabaseImporter {
                     release.executeQuery().close();
                 }
             }
-        } catch (SQLException failure) {
+        } catch (SQLException | java.io.IOException failure) {
             org.slf4j.LoggerFactory.getLogger(LegacyDatabaseImporter.class).error("Falló la importación del esquema anterior", failure);
             throw new SicaException("No se pudo importar la base anterior. La transacción de datos fue cancelada.");
         }

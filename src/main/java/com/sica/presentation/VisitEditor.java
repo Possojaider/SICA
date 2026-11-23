@@ -35,7 +35,7 @@ final class VisitEditor {
         if (permissions.contains("SOLICITAR")) types.addAll(List.of("NO_ANUNCIADA", "SIN_CARNET"));
         DateTimeFormatter format = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
         LocalDateTime now = sica.currentTime().withSecond(0).withNano(0);
-        new FormDialog(owner, "Registrar visita o solicitud")
+        new FormDialog(owner, "Registrar visita o solicitud", "/fxml/forms/visit.fxml")
                 .choices("person", "Persona · documento · ID", options, options.getFirst())
                 .choices("host", "Empresa anfitriona", hosts, hosts.getFirst())
                 .choices("type", "Escenario", types, types.getFirst())
@@ -53,7 +53,7 @@ final class VisitEditor {
     }
 
     void decide(long visit, boolean approve) {
-        new FormDialog(owner, (approve ? "Aprobar" : "Rechazar") + " solicitud " + visit)
+        new FormDialog(owner, (approve ? "Aprobar" : "Rechazar") + " solicitud " + visit, "/fxml/forms/decision.fxml")
                 .multiline("reason", "Motivo obligatorio")
                 .submitLabel(approve ? "Aprobar" : "Rechazar")
                 .show(tasks, values -> () -> {
@@ -63,7 +63,7 @@ final class VisitEditor {
     }
 
     void scan() {
-        new FormDialog(owner, "Registrar entrada mediante QR")
+        new FormDialog(owner, "Registrar entrada mediante QR", "/fxml/forms/scan.fxml")
                 .text("code", "Código del lector o del QR", "")
                 .submitLabel("Registrar entrada")
                 .show(tasks, values -> () -> {
@@ -73,7 +73,7 @@ final class VisitEditor {
     }
 
     void incident(String selectedVisit) {
-        new FormDialog(owner, "Reportar incidente")
+        new FormDialog(owner, "Reportar incidente", "/fxml/forms/incident.fxml")
                 .text("visit", "ID de visita", selectedVisit)
                 .multiline("description", "Descripción")
                 .show(tasks, values -> {

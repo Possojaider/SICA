@@ -27,34 +27,6 @@ public interface Store {
 
     <T> T transaction(Function<Unit, T> operation);
 
-    interface Unit {
-        Account byEmail(String email);
-        List<Option> companies(Long company);
-        Statistics statistics(Long company);
-        Account account(long id);
-        boolean activeCompany(long id);
-        Person lockPerson(long id);
-        Visit visit(long id, boolean lock);
-        Visit inside(long person);
-        long createVisit(long person, long company, AccessPolicy type, String state, LocalDateTime start,
-                         LocalDateTime end, long actor, LocalDateTime now, String plate);
-        void decide(long visit, String state, long actor, LocalDateTime now, String reason);
-        void notifyRequest(long visit, long company, LocalDateTime now);
-        void notifyDecision(long visit, String state, LocalDateTime now);
-        Data notifications(long user, String search, LocalDateTime from, LocalDateTime until);
-        long unreadNotifications(long user);
-        boolean markNotificationRead(long user, long id, LocalDateTime now);
-        Visit visitByCredential(String hash);
-        String credentialHash(long visit);
-        void setCredential(long visit, String hash);
-        void enter(long visit, LocalDateTime now);
-        void exit(long visit, String state, LocalDateTime now);
-        long company(Long id, Company form);
-        long person(Long id, PersonForm form);
-        long user(Long id, UserForm form);
-        void archive(Entity entity, long id);
-        long incident(long visit, long reporter, String description, LocalDateTime now);
-        Data report(Report report, Long company, String search, LocalDateTime from, LocalDateTime until);
-        void audit(Long actor, String action, String table, Long entity, String details);
-    }
+    /** Capacidades del mismo contexto transaccional; los servicios usan puertos específicos. */
+    interface Unit extends AuthenticationRepository, DirectoryRepository, VisitRepository, NotificationRepository, ReportingRepository, AuditRepository {}
 }
